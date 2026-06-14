@@ -110,9 +110,13 @@ config_version = "0.2.1"
 # 冷启动 / 刷新的最大 token；0 为自动。
 # max_tokens = 0
 # 冷启动 / 刷新提示词模板。占位符：
-# {nickname}{personality}{reply_style}{name}{total_label}{dimensions_doc}{scores_keys_doc}
-# {user_nickname}{group_cardname}{memory_points}{recent_chat}{existing_block}{size_limit}
+# {nickname}{personality}{reply_style}{name}{task_intro}{total_label}{dimensions_doc}{scores_keys_doc}
+# {person_identities}{user_nickname}{group_cardname}{memory_points}{recent_chat}{refresh_guidance}{existing_block}{size_limit}
 # prompt_template = ""
+# 仅刷新印象时插入的评估指引（冷启动不会插入）；留空则用内置默认。
+# refresh_guidance = ""
+# 仅刷新印象时使用的采样温度；留空则沿用 temperature。可略调高以增加重评幅度。
+# refresh_temperature = 0.85
 
 [notify]
 # 加减分时是否发送【系统通知】消息。

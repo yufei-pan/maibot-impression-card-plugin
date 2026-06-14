@@ -272,6 +272,21 @@ def test_helpers() -> None:
     assert affinity._extract_json_object("```json\n{\"x\": 2}\n```") == {"x": 2}
     assert affinity._extract_json_object("no json here") is None
     assert affinity._parse_memory_points('["甲", "乙"]') == ["甲", "乙"]
+    assert affinity._parse_memory_points('["性格:爱开玩笑:1.0", "爱好:写代码:0.8"]') == [
+        "爱开玩笑",
+        "写代码",
+    ]
+    assert affinity._memory_points_from_profile(
+        {"success": True, "summary": "活泼\n话多", "traits": ["活泼", "话多"], "evidence": []}
+    ) == ["活泼", "话多"]
+    assert affinity._memory_points_from_profile(
+        {
+            "success": True,
+            "summary": "",
+            "traits": [],
+            "evidence": [{"content": "经常深夜发消息"}],
+        }
+    ) == ["经常深夜发消息"]
     assert affinity._parse_group_cardnames(
         '[{"group_id": "1", "group_cardname": "小麦"}, {"group_id": "2", "group_cardname": "大麦"}]'
     ) == ["小麦", "大麦"]
@@ -281,6 +296,30 @@ def test_helpers() -> None:
     assert affinity._limit_label(256, "chars") == "256 字符"
     assert affinity._limit_label(81920, "bytes") == "81920 字节"
     assert affinity._truncate_text("abcdef", 4, "chars") == "abc…"
+    assert affinity._normalize_person_target("@kes") == "kes"
+    assert affinity._normalize_person_target("「demonte」") == "demonte"
+    assert affinity._normalize_person_target("别名：kes") == "kes"
+    assert affinity._names_equal("Kes", "kes")
+    ref = affinity.PersonRef(
+        person_id="pid-abc",
+        platform="qq",
+        user_id="123456789",
+        user_nickname="DUser",
+        person_name="demonte",
+        group_cardname_entries=[("111", "小麦"), ("222", "大麦")],
+        group_cardnames=["小麦", "大麦"],
+    )
+    identities = affinity._format_person_identities(ref, stored_display_name="小麦")
+    assert "123456789" in identities
+    assert "DUser" in identities
+    assert "demonte" in identities
+    assert "群 111" in identities
+    assert "均指同一人" in identities
+    info = {"person_name": "demonte", "user_nickname": "DUser", "group_cardname": '[{"group_cardname": "kes"}]'}
+    assert affinity._person_info_matches_alias(info, "kes")
+    assert affinity._person_info_matches_alias(info, "demonte")
+    entries = affinity._parse_group_cardname_entries(info["group_cardname"])
+    assert entries == [("", "kes")]
     assert affinity.DEFAULT_DESCRIPTION_SIZE_LIMIT == 256
     assert affinity.DEFAULT_IMPRESSION_NOTE_SIZE_LIMIT == 81920
     assert affinity.DEFAULT_RECENT_MESSAGES_LIMIT == 1024

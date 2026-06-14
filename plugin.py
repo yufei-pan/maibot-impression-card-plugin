@@ -161,10 +161,10 @@ DEFAULT_COLD_START_TEMPERATURE = 0.75
 DEFAULT_COLD_START_MAX_TOKENS = 0
 
 DEFAULT_COLD_START_PROMPT_TEMPLATE = """你是{nickname}。
-你的人格设定：{personality}
-你的表达风格：{reply_style}
+{personality}
+{reply_style}
 
-你要为群友「{name}」建立一份「好感度档案」。这是一个欢乐向的设定，请完全以你的视角、按你的喜好与脾气来打分，可以主观、可以毒舌、可以偏心，不必客观中立。
+你要为群友「{name}」{task_intro}一份「好感度档案」。这是一个欢乐向的设定，请完全以你的视角、按你的喜好与脾气来打分，可以主观、可以毒舌、可以偏心，不必客观中立。
 
 评分维度（每项参考 0-10，5 为中间值；分数越高表示你越认可该项；加分=奖励、扣分=不满。各维度均为正向表述，允许极端越界）：
 {dimensions_doc}
@@ -172,14 +172,17 @@ DEFAULT_COLD_START_PROMPT_TEMPLATE = """你是{nickname}。
 同时给一个「{total_label}」总分（同样以 0-10 为参考，可越界）。
 
 关于这个人你已知的信息：
-- 平台昵称：{user_nickname}
-- 群名片：{group_cardname}
+{person_identities}
 - 你的印象记忆：{memory_points}
 - 最近的聊天记录：
+  - 请求中quote后面跟的是消息id，指用户对之前的同一id消息进行了引用。
+  - 在聊天记录中，不同的人正在互动，（{nickname}也是一位参与的用户），请注意辨别不同用户的身份。
 {recent_chat}
-{existing_block}
+{refresh_guidance}{existing_block}
 请只输出一个 JSON 对象（不要输出任何额外文字、解释或代码块标记），格式如下：
 {{"total": 数字, "scores": {{{scores_keys_doc}}}, "description": "用你的口吻写的人物简介，{size_limit}字以内"}}"""
+
+DEFAULT_REFRESH_GUIDANCE = """【刷新评估】这是一次全面重算，不是微调旧分。请优先依据「印象记忆」与「最近聊天记录」重新判断你对 ta 的真实感受；下方旧档案仅供参考，各项分数与简介都可以明显上升或下降，不要惯性膨胀，也不要死守先入为主的旧印象。"""
 
 # 系统通知。
 DEFAULT_NOTIFY_ENABLED = True
@@ -240,6 +243,129 @@ def _truncate_text(text: str, limit: int, limit_unit: str) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)] + "…"
+
+
+def _names_equal(a: str, b: str) -> bool:
+    left = str(a or "").strip()
+    right = str(b or "").strip()
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if left.isascii() and right.isascii():
+        return left.casefold() == right.casefold()
+    return False
+
+
+def _normalize_person_target(raw: str) -> str:
+    """清理工具/命令传入的人物指称（@、括号、别名前缀等）。"""
+    text = str(raw or "").strip()
+    if text.startswith("@"):
+        text = text[1:].strip()
+    if len(text) >= 2 and text[0] in "「『\"'" and text[-1] in "」』\"'":
+        text = text[1:-1].strip()
+    for prefix in ("别名:", "别名：", "群名片:", "群名片："):
+        if text.startswith(prefix):
+            text = text[len(prefix) :].strip()
+            break
+    return text
+
+
+def _parse_group_cardname_entries(raw: Any) -> list[tuple[str, str]]:
+    """从 PersonInfo.group_cardname 解析 (group_id, group_cardname) 列表。"""
+    if raw is None:
+        return []
+    parsed: Any = raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return [("", raw.strip())]
+    entries: list[tuple[str, str]] = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, Mapping):
+                group_id = str(item.get("group_id") or "").strip()
+                name = str(item.get("group_cardname") or "").strip()
+            else:
+                group_id, name = "", str(item or "").strip()
+            if name:
+                entries.append((group_id, name))
+    elif isinstance(parsed, Mapping):
+        group_id = str(parsed.get("group_id") or "").strip()
+        name = str(parsed.get("group_cardname") or "").strip()
+        if name:
+            entries.append((group_id, name))
+    elif isinstance(parsed, str) and parsed.strip():
+        entries.append(("", parsed.strip()))
+    return entries
+
+
+def _platform_user_id_label(platform: str) -> str:
+    key = str(platform or "").strip().lower()
+    if key in {"qq", "onebot", "napcat", "lagrange"}:
+        return "QQ 号"
+    if key == "telegram":
+        return "Telegram ID"
+    if key == "discord":
+        return "Discord ID"
+    if platform:
+        return f"{platform} 用户 ID"
+    return "用户 ID"
+
+
+def _collect_person_identity_items(
+    ref: PersonRef,
+    *,
+    stored_display_name: str = "",
+) -> list[tuple[str, str]]:
+    """汇总所有可用于指代该群友的身份信息，供冷启动 / 刷新提示词使用。"""
+    items: list[tuple[str, str]] = []
+    seen_names: set[str] = set()
+
+    def add_name(label: str, value: str) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        key = text.casefold()
+        if key in seen_names:
+            return
+        seen_names.add(key)
+        items.append((label, text))
+
+    user_id = str(ref.user_id or "").strip()
+    if user_id:
+        items.append((_platform_user_id_label(ref.platform), user_id))
+
+    add_name("平台昵称", ref.user_nickname)
+    add_name("麦麦起的别名", ref.person_name)
+    for group_id, card in ref.group_cardname_entries:
+        label = f"群名片（群 {group_id}）" if group_id else "群名片"
+        add_name(label, card)
+    add_name("印象档案显示名", stored_display_name)
+    person_id = str(ref.person_id or "").strip()
+    if person_id and person_id != user_id:
+        items.append(("内部人物 ID", person_id))
+    return items
+
+
+def _format_person_identities(ref: PersonRef, *, stored_display_name: str = "") -> str:
+    items = _collect_person_identity_items(ref, stored_display_name=stored_display_name)
+    if not items:
+        return f"（除称呼「{ref.display_name}」外暂无更多身份信息）"
+    lines = [f"以下昵称、号码、群名片等均指同一人「{ref.display_name}」："]
+    lines.extend(f"- {label}：{value}" for label, value in items)
+    return "\n".join(lines)
+
+
+def _person_info_matches_alias(info: Mapping[str, Any], name: str) -> bool:
+    if not name:
+        return False
+    if _names_equal(str(info.get("person_name") or ""), name):
+        return True
+    if _names_equal(str(info.get("user_nickname") or ""), name):
+        return True
+    return any(_names_equal(card, name) for card in _parse_group_cardnames(info.get("group_cardname")))
 
 
 def _param(name: str, param_type: ToolParamType, description: str, required: bool = False) -> ToolParameterInfo:
@@ -956,7 +1082,17 @@ class ColdStartSectionConfig(PluginConfigBase):
     prompt_template: str = Field(
         default="",
         json_schema_extra={"placeholder": DEFAULT_COLD_START_PROMPT_TEMPLATE},
-        description="冷启动 / 刷新提示词模板。占位符：{nickname}{personality}{reply_style}{name}{total_label}{dimensions_doc}{scores_keys_doc}{user_nickname}{group_cardname}{memory_points}{recent_chat}{existing_block}{size_limit}。",
+        description="冷启动 / 刷新提示词模板。占位符：{nickname}{personality}{reply_style}{name}{task_intro}{total_label}{dimensions_doc}{scores_keys_doc}{person_identities}{user_nickname}{group_cardname}{memory_points}{recent_chat}{refresh_guidance}{existing_block}{size_limit}。",
+    )
+    refresh_guidance: str = Field(
+        default="",
+        json_schema_extra={"placeholder": DEFAULT_REFRESH_GUIDANCE},
+        description="仅刷新印象时插入的评估指引；留空则用内置默认。",
+    )
+    refresh_temperature: float | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_COLD_START_TEMPERATURE)},
+        description="仅刷新印象时使用的采样温度；留空则沿用 temperature。",
     )
 
 
@@ -1240,6 +1376,24 @@ class AffinityStore:
     async def get(self, person_id: str) -> Optional[AffinityRecord]:
         return await asyncio.to_thread(self._get_sync, person_id)
 
+    async def find_by_display_name(self, name: str) -> Optional[AffinityRecord]:
+        return await asyncio.to_thread(self._find_by_display_name_sync, name)
+
+    def _find_by_display_name_sync(self, name: str) -> Optional[AffinityRecord]:
+        clean = str(name or "").strip()
+        if not clean:
+            return None
+        conn = self._connect()
+        cur = conn.execute(
+            "SELECT person_id, platform, user_id, display_name, total, scores, description, updated_at "
+            "FROM affinity WHERE display_name = ? COLLATE NOCASE LIMIT 2",
+            (clean,),
+        )
+        rows = cur.fetchall()
+        if len(rows) != 1:
+            return None
+        return self._row_to_record(rows[0])
+
     async def upsert(self, record: AffinityRecord) -> None:
         await asyncio.to_thread(self._upsert_sync, record)
 
@@ -1259,6 +1413,7 @@ class PersonRef:
     user_nickname: str = ""
     person_name: str = ""
     group_cardnames: list[str] = field(default_factory=list)
+    group_cardname_entries: list[tuple[str, str]] = field(default_factory=list)
     memory_points: list[str] = field(default_factory=list)
 
     @property
@@ -1456,14 +1611,67 @@ class AffinityPlugin(MaiBotPlugin):
             return None
         return await self._enrich_person(person_id, platform, user_id)
 
-    async def _person_from_name(self, name: str) -> Optional[PersonRef]:
-        name = str(name or "").strip()
+    async def _person_from_name(self, name: str, *, group_id: str = "") -> Optional[PersonRef]:
+        name = _normalize_person_target(name)
         if not name:
             return None
+
         person_id = await self.ctx.person.get_id_by_name(name)
+        if person_id:
+            ref = await self._enrich_person(str(person_id), "", "")
+            if ref:
+                return ref
+
+        for field in ("user_nickname", "person_name"):
+            info = await self.ctx.db.get(
+                model_name="PersonInfo",
+                filters={field: name},
+                single_result=True,
+            )
+            if isinstance(info, Mapping) and info.get("person_id"):
+                ref = await self._enrich_person(str(info["person_id"]), "", "")
+                if ref:
+                    return ref
+
+        card_ref = await self._person_from_group_cardname(name, group_id=group_id)
+        if card_ref:
+            return card_ref
+
+        if self._store is not None:
+            record = await self._store.find_by_display_name(name)
+            if record is not None:
+                ref = await self._enrich_person(record.person_id, record.platform, record.user_id)
+                if ref:
+                    return ref
+
+        ref = await self._enrich_person(name, "", "")
+        return ref
+
+    async def _person_from_group_cardname(self, name: str, *, group_id: str = "") -> Optional[PersonRef]:
+        candidates = await self.ctx.db.get(
+            model_name="PersonInfo",
+            filters={"is_known": True},
+            limit=500,
+        )
+        if not isinstance(candidates, list):
+            return None
+        matches: list[Mapping[str, Any]] = []
+        group_id = str(group_id or "").strip()
+        for info in candidates:
+            if not isinstance(info, Mapping):
+                continue
+            for entry_group_id, card in _parse_group_cardname_entries(info.get("group_cardname")):
+                if not _names_equal(card, name):
+                    continue
+                if group_id and entry_group_id and entry_group_id != group_id:
+                    continue
+                matches.append(info)
+                break
+        if len(matches) != 1:
+            return None
+        person_id = str(matches[0].get("person_id") or "").strip()
         if not person_id:
-            # 也许直接传的就是 person_id
-            person_id = name
+            return None
         return await self._enrich_person(person_id, "", "")
 
     async def _enrich_person(self, person_id: str, platform: str, user_id: str) -> Optional[PersonRef]:
@@ -1476,6 +1684,7 @@ class AffinityPlugin(MaiBotPlugin):
             if not (platform and user_id):
                 return None
             return PersonRef(person_id=person_id, platform=platform, user_id=user_id)
+        memory_points = await self._load_memory_points(person_id, info.get("memory_points"))
         return PersonRef(
             person_id=person_id,
             platform=str(info.get("platform") or platform or "qq"),
@@ -1483,15 +1692,42 @@ class AffinityPlugin(MaiBotPlugin):
             user_nickname=str(info.get("user_nickname") or ""),
             person_name=str(info.get("person_name") or ""),
             group_cardnames=_parse_group_cardnames(info.get("group_cardname")),
-            memory_points=_parse_memory_points(info.get("memory_points")),
+            group_cardname_entries=_parse_group_cardname_entries(info.get("group_cardname")),
+            memory_points=memory_points,
         )
+
+    async def _load_memory_points(self, person_id: str, db_raw: Any) -> list[str]:
+        """从 PersonInfo 或 A_Memorix 人物画像加载印象记忆，供冷启动 / 刷新提示词使用。"""
+        points = _parse_memory_points(db_raw)
+        if points:
+            return points
+        try:
+            value = await self.ctx.person.get_value(person_id, "memory_points")
+            if not isinstance(value, dict):
+                points = _parse_memory_points(value)
+                if points:
+                    return points
+        except Exception as exc:
+            self.ctx.logger.debug("person.get_value(memory_points) 失败 person_id=%s: %s", person_id, exc)
+        try:
+            profile = await self.ctx.call_capability(
+                "memory.get_person_profile",
+                person_id=person_id,
+                limit=12,
+            )
+            points = _memory_points_from_profile(profile if isinstance(profile, Mapping) else {})
+            if points:
+                return points
+        except Exception as exc:
+            self.ctx.logger.debug("memory.get_person_profile 失败 person_id=%s: %s", person_id, exc)
+        return []
 
     async def _resolve_target(self, target: str, kwargs: dict[str, Any]) -> tuple[Optional[PersonRef], str]:
         """把工具/命令里的 target 解析成 PersonRef。
 
-        target 可为：空（取当前发言者）、纯数字（user_id）、名字 / person_id。
+        target 可为：空（取当前发言者）、纯数字（user_id）、昵称 / 别名 / 群名片 / person_name / person_id。
         """
-        platform, caller_uid, _ = _caller_identity(kwargs)
+        platform, caller_uid, group_id = _caller_identity(kwargs)
         target = str(target or "").strip()
 
         if not target:
@@ -1504,8 +1740,11 @@ class AffinityPlugin(MaiBotPlugin):
             ref = await self._person_from_user(platform, target)
             return (ref, "") if ref else (None, f"找不到 user_id={target} 对应的人物。")
 
-        ref = await self._person_from_name(target)
-        return (ref, "") if ref else (None, f"找不到名为「{target}」的人物。")
+        ref = await self._person_from_name(target, group_id=group_id)
+        if ref:
+            return ref, ""
+        normalized = _normalize_person_target(target)
+        return None, f"找不到名为「{normalized}」的人物（可试 QQ 号、昵称、别名或群名片）。"
 
     # ------------------------------------------------------------------ #
     # 数据存取
@@ -1920,11 +2159,17 @@ class AffinityPlugin(MaiBotPlugin):
             "向当前聊天流发送某人的印象卡片图片（与 /卡片 命令相同的卡面）。"
             "适合在对话中你想主动展示、介绍或总结某人对你的印象档案时使用，"
             "例如对方询问印象、聊到好感相关话题、或你想用卡片回应互动。"
-            "target 传 QQ 号或名字；省略则发给当前发言者。"
+            "target 传 QQ 号、平台昵称、你给的别名（person_name）、群名片或 person_id；"
+            "省略则发给当前发言者。"
             "若库中尚无该人档案会先冷启动生成；可选 refresh_first 在发送前重算分值与简介。"
         ),
         parameters=[
-            _param("target", ToolParamType.STRING, "对象：QQ号 或 名字；省略=当前发言者", False),
+            _param(
+                "target",
+                ToolParamType.STRING,
+                "对象：QQ号、昵称、别名(person_name)、群名片或 person_id；省略=当前发言者",
+                False,
+            ),
             _param(
                 "refresh_first",
                 ToolParamType.BOOLEAN,
@@ -2042,9 +2287,9 @@ class AffinityPlugin(MaiBotPlugin):
 
     async def _resolve_query_target(self, kwargs: dict[str, Any]) -> tuple[Optional[PersonRef], str]:
         """命令查询的对象解析：自己 / @他人 / 引用他人 / 名字（受 allow_query_others 约束）。"""
-        platform, caller_uid, _ = _caller_identity(kwargs)
+        platform, caller_uid, group_id = _caller_identity(kwargs)
         matched = kwargs.get("matched_groups") or {}
-        target_text = str(matched.get("target") or "").strip().lstrip("@").strip()
+        target_text = _normalize_person_target(str(matched.get("target") or ""))
         at_uid = _extract_target_user_id(kwargs)
 
         wants_other = bool(at_uid or target_text)
@@ -2058,7 +2303,7 @@ class AffinityPlugin(MaiBotPlugin):
             if target_text.isdigit():
                 ref = await self._person_from_user(platform, target_text)
             else:
-                ref = await self._person_from_name(target_text)
+                ref = await self._person_from_name(target_text, group_id=group_id)
             return (ref, "") if ref else (None, f"找不到「{target_text}」。")
 
         if not caller_uid:
@@ -2082,7 +2327,11 @@ class AffinityPlugin(MaiBotPlugin):
     ) -> AffinityRecord:
         cold = self.config.cold_start
         model = _estr(cold.model, DEFAULT_COLD_START_MODEL)
-        temperature = _efloat(cold.temperature, DEFAULT_COLD_START_TEMPERATURE)
+        is_refresh = existing is not None
+        if is_refresh and cold.refresh_temperature is not None:
+            temperature = _efloat(cold.refresh_temperature, DEFAULT_COLD_START_TEMPERATURE)
+        else:
+            temperature = _efloat(cold.temperature, DEFAULT_COLD_START_TEMPERATURE)
         max_tokens = _eint(cold.max_tokens, DEFAULT_COLD_START_MAX_TOKENS, minimum=0) or None
         template = _etmpl(cold.prompt_template, DEFAULT_COLD_START_PROMPT_TEMPLATE)
         size_limit = _eint(self.config.description.size_limit, DEFAULT_DESCRIPTION_SIZE_LIMIT, minimum=1)
@@ -2097,6 +2346,9 @@ class AffinityPlugin(MaiBotPlugin):
         )
         scores_keys_doc = ", ".join(f'"{d.key}": 数字' for d in self._dimensions)
         existing_block = self._existing_block(existing)
+        refresh_guidance = self._refresh_guidance_block(is_refresh)
+        task_intro = "重新评估并更新" if is_refresh else "建立"
+        stored_display_name = str(existing.display_name or "").strip() if existing else ""
 
         prompt = _render(
             template,
@@ -2104,13 +2356,16 @@ class AffinityPlugin(MaiBotPlugin):
             personality=personality,
             reply_style=reply_style,
             name=ref.display_name,
+            task_intro=task_intro,
             total_label=self._total_label,
             dimensions_doc=dimensions_doc,
             scores_keys_doc=scores_keys_doc,
+            person_identities=_format_person_identities(ref, stored_display_name=stored_display_name),
             user_nickname=ref.user_nickname or "（未知）",
             group_cardname=ref.group_cardname or "（无）",
             memory_points="；".join(ref.memory_points) if ref.memory_points else "（无）",
             recent_chat=recent_chat or "（无）",
+            refresh_guidance=refresh_guidance,
             existing_block=existing_block,
             size_limit=size_limit,
         )
@@ -2122,12 +2377,16 @@ class AffinityPlugin(MaiBotPlugin):
                 prompt=prompt, model=model, temperature=temperature, max_tokens=max_tokens
             )
         except Exception as exc:
-            self.ctx.logger.warning("冷启动 LLM 调用异常: %s", exc, exc_info=True)
+            self.ctx.logger.warning("%s LLM 调用异常: %s", "刷新印象" if is_refresh else "冷启动", exc, exc_info=True)
             result = {"success": False}
 
         parsed = _extract_json_object(result.get("response", "")) if result.get("success") else None
         if parsed is None:
-            self.ctx.logger.info("冷启动未拿到有效 JSON，使用默认中间值 person_id=%s", ref.person_id)
+            self.ctx.logger.info(
+                "%s未拿到有效 JSON，使用默认中间值 person_id=%s",
+                "刷新印象" if is_refresh else "冷启动",
+                ref.person_id,
+            )
             for dim in self._dimensions:
                 record.scores.setdefault(dim.key, self._default_score)
             if not record.description:
@@ -2149,10 +2408,21 @@ class AffinityPlugin(MaiBotPlugin):
         record.updated_at = _now()
         return record
 
+    def _refresh_guidance_block(self, is_refresh: bool) -> str:
+        if not is_refresh:
+            return ""
+        text = _etmpl(self.config.cold_start.refresh_guidance, DEFAULT_REFRESH_GUIDANCE).strip()
+        if not text:
+            return ""
+        return text + "\n"
+
     def _existing_block(self, existing: Optional[AffinityRecord]) -> str:
         if existing is None:
             return ""
-        lines = ["\n你之前对 ta 的评价（请在此基础上酌情更新）：", f"- {self._total_label}：{_fmt_num(existing.total)}"]
+        lines = [
+            "你之前对 ta 的档案（仅供参考，不必在旧分附近微调，允许大幅改动）：",
+            f"- {self._total_label}：{_fmt_num(existing.total)}",
+        ]
         for dim in self._dimensions:
             lines.append(f"- {dim.label}：{_fmt_num(existing.scores.get(dim.key, self._default_score))}")
         if existing.description:
@@ -2388,20 +2658,60 @@ def _sniff_image_mime(data: bytes) -> str:
     return "image/jpeg"
 
 
+def _parse_memory_point_item(item: Any) -> str:
+    text = str(item or "").strip()
+    if not text:
+        return ""
+    parts = text.split(":")
+    if len(parts) >= 3:
+        content = ":".join(parts[1:-1]).strip()
+        return content or text
+    return text
+
+
 def _parse_memory_points(raw: Any) -> list[str]:
     if raw is None:
         return []
     if isinstance(raw, list):
-        return [str(item) for item in raw if str(item).strip()]
+        return [point for point in (_parse_memory_point_item(item) for item in raw) if point]
     if isinstance(raw, str) and raw.strip():
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            return [raw.strip()]
+            return [_parse_memory_point_item(raw)]
         if isinstance(parsed, list):
-            return [str(item) for item in parsed if str(item).strip()]
-        return [str(parsed)]
+            return [point for point in (_parse_memory_point_item(item) for item in parsed) if point]
+        return [_parse_memory_point_item(parsed)]
     return []
+
+
+def _memory_points_from_profile(profile: Mapping[str, Any]) -> list[str]:
+    if profile.get("success") is False:
+        return []
+    points: list[str] = []
+    seen: set[str] = set()
+    for trait in profile.get("traits") or []:
+        text = str(trait or "").strip().lstrip("- ").strip()
+        if text and text not in seen:
+            seen.add(text)
+            points.append(text)
+    summary = str(profile.get("summary") or "").strip()
+    if not points and summary:
+        for line in summary.splitlines():
+            text = line.strip().lstrip("- ").strip()
+            if text and text not in seen:
+                seen.add(text)
+                points.append(text)
+    for item in profile.get("evidence") or []:
+        if not isinstance(item, Mapping):
+            continue
+        text = str(item.get("content") or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            points.append(text)
+        if len(points) >= 12:
+            break
+    return points
 
 
 def _parse_group_cardnames(raw: Any) -> list[str]:
