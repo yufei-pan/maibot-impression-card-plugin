@@ -86,7 +86,7 @@
 ## 安装
 
 1. 把本目录放进（或软链到）`MaiBot/plugins/`。
-2. 依赖：`httpx`、`pillow`（见 `_manifest.json`）。
+2. 依赖：`httpx`、`pillow`（见 `_manifest.json`）。卡面中文渲染使用插件内置 `assets/fonts/` 的 Noto Sans SC（woff2），**无需访问 Google Fonts 或外网**。
 3. 启动 MaiBot 自动加载，或在 WebUI 中管理。
 
 ## 开发 / 测试

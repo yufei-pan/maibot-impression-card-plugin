@@ -60,6 +60,9 @@ def test_manifest_capabilities_cover_usage() -> None:
         if proxy in proxy_to_capability:
             used.add(f"{proxy_to_capability[proxy]}.{method}")
 
+    if "maisaka.context.append" in source:
+        used.add("maisaka.context.append")
+
     manifest = json.loads((PLUGIN_DIR / "_manifest.json").read_text(encoding="utf-8"))
     declared = set(manifest.get("capabilities", []))
     missing = used - declared
@@ -131,6 +134,16 @@ def test_svg_generation() -> None:
     assert "gauge-bar-arrow" not in affinity.build_gauge_bar_svg(99.0, 10.0, 0.0)
     assert "gauge-bar-arrow" not in affinity.build_gauge_bar_svg(-99.0, 10.0, 0.0)
     print("ok: svg generation (radar sectors + gauge bar overflow)")
+
+
+def test_embedded_font_css() -> None:
+    css = affinity._embedded_font_face_css()
+    assert "@font-face" in css and "Noto Sans SC" in css
+    assert "fonts.googleapis.com" not in css
+    wrapped = affinity._wrap_card_html_for_render('<div id="card">x</div>')
+    assert wrapped.startswith("<!DOCTYPE html>")
+    assert "fonts.googleapis.com" not in wrapped
+    print("ok: embedded font css (offline, no google fonts)")
 
 
 def test_templates_render_clean() -> None:
@@ -311,6 +324,7 @@ def main() -> None:
     test_resolve_dimensions_default()
     test_effective_helpers()
     test_svg_generation()
+    test_embedded_font_css()
     test_templates_render_clean()
     test_avatar_frame_extraction()
     test_chroma_composite()

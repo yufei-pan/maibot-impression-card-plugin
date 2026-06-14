@@ -45,7 +45,8 @@
     "render.html2png",
     "send.text",
     "send.image",
-    "send.emoji"
+    "send.emoji",
+    "maisaka.context.append"
   ],
   "i18n": {
     "default_locale": "zh-CN"

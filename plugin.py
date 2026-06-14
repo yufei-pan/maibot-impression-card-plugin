@@ -41,6 +41,12 @@ from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
 CURRENT_CONFIG_VERSION = "0.2.0"
 SHIPPED_CONFIG_TEMPLATE_NAME = "config.default.toml"
+_PLUGIN_ROOT = Path(__file__).resolve().parent
+_CARD_FONT_FILES = (
+    (400, "NotoSansSC-400.woff2"),
+    (700, "NotoSansSC-700.woff2"),
+)
+_FONT_FACE_CSS_CACHE: str | None = None
 
 # --------------------------------------------------------------------------- #
 # 默认值（config.toml 留空 / 不写即跟随这里；插件升级改默认时空字段自动跟随新值）
@@ -48,6 +54,10 @@ SHIPPED_CONFIG_TEMPLATE_NAME = "config.default.toml"
 
 # 中间值 / 一切默认分值都是 5。
 DEFAULT_SCORE = 5.0
+_SCORE_GUIDANCE_FOR_TOOLS = (
+    "各维度与总值的默认中间值是 5；"
+    "虽无硬性上下限，但一般会在 0–10 之间浮动，极少数情况可故意越界。"
+)
 DEFAULT_SCALE_MAX = 10.0
 DEFAULT_SCALE_MIN = 0.0
 DEFAULT_TOTAL_LABEL = "好感度"
@@ -428,12 +438,35 @@ def build_gauge_bar_svg(
     return "".join(parts)
 
 
+def _embedded_font_face_css() -> str:
+    """从插件内置 woff2 生成 @font-face（data URI），渲染不依赖外网。"""
+    global _FONT_FACE_CSS_CACHE
+    if _FONT_FACE_CSS_CACHE is not None:
+        return _FONT_FACE_CSS_CACHE
+
+    rules: list[str] = []
+    font_dir = _PLUGIN_ROOT / "assets" / "fonts"
+    for weight, filename in _CARD_FONT_FILES:
+        path = font_dir / filename
+        if not path.is_file():
+            continue
+        b64 = b64encode(path.read_bytes()).decode("ascii")
+        rules.append(
+            "@font-face{"
+            "font-family:'Noto Sans SC';"
+            f"font-weight:{weight};font-style:normal;font-display:swap;"
+            f"src:url(data:font/woff2;base64,{b64}) format('woff2');"
+            "}"
+        )
+    _FONT_FACE_CSS_CACHE = f"<style>{''.join(rules)}</style>" if rules else ""
+    return _FONT_FACE_CSS_CACHE
+
+
 def _wrap_card_html_for_render(fragment: str) -> str:
-    """包成完整 HTML 文档并加载中文字体（Playwright 渲染用）。"""
+    """包成完整 HTML 文档并注入内置中文字体（Playwright 渲染用，无需外网）。"""
     return (
         '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
-        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
-        'family=Noto+Sans+SC:wght@400;700;800&display=swap">'
+        f"{_embedded_font_face_css()}"
         "</head><body>"
         f"{fragment}"
         "</body></html>"
@@ -1409,7 +1442,7 @@ class AffinityPlugin(MaiBotPlugin):
             "这是一个欢乐向的设定，可凭你的主观态度调整。"
             "target 传对方的 QQ 号（user_id）或名字；不传则默认当前发言者。"
             "dimension 传 'total'（好感度总值）或某个维度 key；不传默认 total。"
-            "数值无上下限，可以加到很离谱或减到负数。"
+            f"{_SCORE_GUIDANCE_FOR_TOOLS} "
             "调整后会按配置以【系统通知】播报，并返回该项的新数值。"
         ),
         parameters=[
@@ -1448,7 +1481,7 @@ class AffinityPlugin(MaiBotPlugin):
         "set_score",
         description=(
             "直接把某个人的好感度或某个子项维度设定为指定数值（用于重置 / 校准）。"
-            "target、dimension 规则同 adjust_score。数值无上下限。"
+            f"target、dimension 规则同 adjust_score。{_SCORE_GUIDANCE_FOR_TOOLS}"
         ),
         parameters=[
             _param("target", ToolParamType.STRING, "对象：QQ号(user_id) 或 名字；省略=当前发言者", False),
@@ -1699,7 +1732,8 @@ class AffinityPlugin(MaiBotPlugin):
         "get_impression_detail",
         description=(
             "以 Markdown 形式获取某个人的好感度详细信息（总值、各维度分值、简介）。"
-            "target 规则同 adjust_score。库中没有该人时会先冷启动生成。"
+            f"target 规则同 adjust_score。{_SCORE_GUIDANCE_FOR_TOOLS} "
+            "库中没有该人时会先冷启动生成。"
         ),
         parameters=[
             _param("target", ToolParamType.STRING, "对象：QQ号 或 名字；省略=当前发言者", False),
@@ -1717,7 +1751,8 @@ class AffinityPlugin(MaiBotPlugin):
         "refresh_impression",
         description=(
             "结合 PersonInfo 印象记忆、最近聊天与既有数据，用你的口吻重新评估某个人的"
-            "好感度各项分值与简介（既有数据会作为参考一并更新）。target 规则同 adjust_score。"
+            f"好感度各项分值与简介（既有数据会作为参考一并更新）。target 规则同 adjust_score。"
+            f"{_SCORE_GUIDANCE_FOR_TOOLS}"
         ),
         parameters=[
             _param("target", ToolParamType.STRING, "对象：QQ号 或 名字；省略=当前发言者", False),
@@ -1749,6 +1784,26 @@ class AffinityPlugin(MaiBotPlugin):
         lines.append("**印象简介：**")
         lines.append(record.description.strip() or "（暂无）")
         return "\n".join(lines)
+
+    async def _inject_impression_context(self, stream_id: str, ref: PersonRef, record: AffinityRecord) -> None:
+        """向麦麦的 Maisaka 上下文注入刚发送的印象卡片 Markdown 摘要。"""
+        if not stream_id:
+            return
+        markdown = self._render_detail_markdown(ref, record)
+        body = (
+            f"[系统·印象卡片] 你刚刚向用户发送了关于「{ref.display_name}」的印象卡片，"
+            "以下为卡片中的分值与简介（供你后续对话参考）：\n\n"
+            f"{markdown}"
+        )
+        try:
+            await self.ctx.maisaka.context.append(
+                stream_id=stream_id,
+                segments=[{"type": "text", "content": body}],
+                visible_text=f"已发送 {ref.display_name} 的印象卡片",
+                source_kind="plugin:com.0-hz.impression-card",
+            )
+        except Exception as exc:
+            self.ctx.logger.debug("注入印象卡片上下文失败: %s", exc)
 
     # ------------------------------------------------------------------ #
     # 命令：查询卡片 / 刷新
@@ -1975,8 +2030,6 @@ class AffinityPlugin(MaiBotPlugin):
                 viewport=CARD_VIEWPORT,
                 device_scale_factor=CARD_DEVICE_SCALE,
                 omit_background=True,
-                allow_network=True,
-                wait_for_timeout_ms=800,
             )
             if isinstance(render_result, Mapping) and render_result.get("image_base64"):
                 base_png = b64decode(render_result["image_base64"])
@@ -1989,6 +2042,7 @@ class AffinityPlugin(MaiBotPlugin):
                 + self._render_detail_markdown(ref, record),
                 stream_id,
             )
+            await self._inject_impression_context(stream_id, ref, record)
             return
 
         bg = _estr(img_cfg.background_color, DEFAULT_BACKGROUND_COLOR)
@@ -2019,6 +2073,7 @@ class AffinityPlugin(MaiBotPlugin):
             await self.ctx.send.emoji(out_b64, stream_id)
         else:
             await self.ctx.send.image(out_b64, stream_id)
+        await self._inject_impression_context(stream_id, ref, record)
 
     def _static_avatar_html(self, ref: PersonRef, avatar_bytes: Optional[bytes], frames: list[Any]) -> str:
         """静态路径的头像 HTML：动图头像（被关停动图）取首帧；普通静态头像内嵌原图；都没有则首字占位。"""
