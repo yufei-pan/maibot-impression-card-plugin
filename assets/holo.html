@@ -1,15 +1,23 @@
 <!--
-  好感度卡模板：全息科技（holo） · T 字型布局
+  印象卡片模板：全息科技（holo） · T 字型布局
   占位符与 SVG 着色类同 parchment.html，请勿删除被引用的 class。
 -->
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: transparent; font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+  body {
+    background: transparent;
+    font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  svg text {
+    font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  }
 
   #card {
     width: 920px;
     display: flex; flex-direction: column;
-    border-radius: 20px; overflow: hidden; color: #d7f6ff;
+    border-radius: 20px; overflow: visible; color: #d7f6ff;
     background:
       radial-gradient(circle at 15% 10%, rgba(0,200,255,0.18), rgba(0,0,0,0) 42%),
       radial-gradient(circle at 90% 95%, rgba(180,60,255,0.22), rgba(0,0,0,0) 48%),
@@ -44,10 +52,10 @@
   .score-value { font-size: 40px; font-weight: 800; color: #74e9ff; line-height: 1.05; text-shadow: 0 0 14px rgba(80,220,255,0.6); }
   .score-unit { font-size: 15px; font-weight: 600; color: #9fdcff; margin-left: 4px; }
 
-  .gauge { padding: 2px 30px 14px; }
-  .gauge svg { width: 100%; height: auto; display: block; }
+  .gauge { padding: 2px 8px 14px; overflow: visible; }
+  .gauge svg { width: 100%; height: auto; display: block; overflow: visible; }
 
-  .body { display: flex; border-top: 1px solid rgba(90,220,255,0.35); }
+  .body { display: flex; border-top: 1px solid rgba(90,220,255,0.35); border-radius: 0 0 18px 18px; overflow: hidden; }
   .left {
     width: 45%; padding: 18px 16px 22px;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -75,22 +83,20 @@
   /* —— SVG：雷达 —— */
   .grid { fill: none; stroke: rgba(90,220,255,0.22); stroke-width: 1; }
   .axis { stroke: rgba(90,220,255,0.2); stroke-width: 1; }
-  .radar-fill { fill: rgba(90,220,255,0.25); }
+  .radar-sector-pos { fill: rgba(90,220,255,0.30); }
+  .radar-sector-neg { fill: rgba(255,90,138,0.38); }
+  .radar-sector-over { fill: rgba(180,107,255,0.38); }
   .radar-stroke { stroke: #5ad7ff; stroke-width: 2.5; }
   .radar-vertex { fill: #aef0ff; }
   .axis-label { fill: #d7f6ff; font-size: 15px; font-weight: 700; }
   .axis-value { fill: #74e9ff; font-size: 13px; font-weight: 700; }
 
   /* —— SVG：量表条 —— */
-  .gauge-bar-track { fill: rgba(90,220,255,0.12); }
-  .gauge-bar-zone { fill: rgba(20,40,75,0.6); }
+  .gauge-bar-track { fill: rgba(90,220,255,0.16); }
   .gauge-bar-fill { fill: #5ad7ff; }
   .gauge-bar-over { fill: #b46bff; }
   .gauge-bar-neg { fill: #ff5a8a; }
-  .gauge-bar-tick { stroke: rgba(90,220,255,0.5); stroke-width: 1.5; }
-  .gauge-bar-tick-label { fill: #9fdcff; font-size: 15px; font-weight: 700; }
   .gauge-bar-knob { fill: #eaffff; stroke: #5ad7ff; stroke-width: 2; }
-  .gauge-bar-arrow { fill: #b46bff; }
 </style>
 
 <div id="card">
@@ -105,7 +111,7 @@
     </div>
     <div class="tb-center">◈ {card_title} ◈</div>
     <div class="tb-right">
-      <div class="score-label">AFFINITY</div>
+      <div class="score-label">{total_label}</div>
       <div class="score-value">{total_value}</div>
     </div>
   </div>
@@ -118,7 +124,7 @@
       {legend_html}
     </div>
     <div class="right">
-      <div class="desc-title">▌ 人物档案</div>
+      <div class="desc-title">{impression_title}</div>
       <div class="desc">{description}</div>
     </div>
   </div>

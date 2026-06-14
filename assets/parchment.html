@@ -1,23 +1,32 @@
 <!--
-  好感度卡模板：羊皮纸公会卡（parchment） · T 字型布局
+  印象卡片模板：羊皮纸（parchment） · T 字型布局
   可用占位符：
     {card_title} {avatar_html} {nickname} {alias_block} {cardname_block}
+    {bot_name} {impression_title}
     {total_label} {total_value} {gauge_bar} {radar_svg} {legend_html} {description}
   SVG 着色类（请勿删除，由插件生成的 SVG 引用）：
-    grid / axis / radar-fill / radar-stroke / radar-vertex / axis-label / axis-value
-    gauge-bar-track / gauge-bar-zone / gauge-bar-fill / gauge-bar-neg / gauge-bar-over
-    gauge-bar-tick / gauge-bar-tick-label / gauge-bar-knob / gauge-bar-arrow
+    grid / axis / radar-sector-pos / radar-sector-neg / radar-sector-over
+    radar-stroke / radar-vertex / axis-label / axis-value
+    gauge-bar-track / gauge-bar-fill / gauge-bar-neg / gauge-bar-over / gauge-bar-knob
 -->
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: transparent; font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+  body {
+    background: transparent;
+    font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  svg text {
+    font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  }
 
   #card {
     width: 920px;
     display: flex;
     flex-direction: column;
     border-radius: 22px;
-    overflow: hidden;
+    overflow: visible;
     color: #4a3416;
     background:
       radial-gradient(circle at 20% 12%, rgba(255,250,235,0.7), rgba(0,0,0,0) 45%),
@@ -62,11 +71,16 @@
   .score-unit { font-size: 15px; font-weight: 600; color: #9a6a32; margin-left: 4px; }
 
   /* —— 量表条 —— */
-  .gauge { padding: 2px 30px 14px; }
-  .gauge svg { width: 100%; height: auto; display: block; }
+  .gauge { padding: 2px 8px 14px; overflow: visible; }
+  .gauge svg { width: 100%; height: auto; display: block; overflow: visible; }
 
   /* —— 下方主区域（T 的竖，左右两块） —— */
-  .body { display: flex; border-top: 2px solid rgba(138,90,43,0.5); }
+  .body {
+    display: flex;
+    border-top: 2px solid rgba(138,90,43,0.5);
+    border-radius: 0 0 16px 16px;
+    overflow: hidden;
+  }
   .left {
     width: 45%;
     padding: 18px 16px 22px;
@@ -96,22 +110,20 @@
   /* —— SVG：雷达 —— */
   .grid { fill: none; stroke: rgba(138,90,43,0.35); stroke-width: 1; }
   .axis { stroke: rgba(138,90,43,0.3); stroke-width: 1; }
-  .radar-fill { fill: rgba(192,120,52,0.32); }
+  .radar-sector-pos { fill: rgba(192,120,52,0.38); }
+  .radar-sector-neg { fill: rgba(181,58,43,0.42); }
+  .radar-sector-over { fill: rgba(224,168,58,0.40); }
   .radar-stroke { stroke: #b5651d; stroke-width: 2.5; }
   .radar-vertex { fill: #8a4a18; }
   .axis-label { fill: #6a3a10; font-size: 15px; font-weight: 700; }
   .axis-value { fill: #9a6a32; font-size: 13px; font-weight: 700; }
 
   /* —— SVG：量表条 —— */
-  .gauge-bar-track { fill: rgba(120,80,30,0.14); }
-  .gauge-bar-zone { fill: rgba(255,250,238,0.55); }
+  .gauge-bar-track { fill: rgba(120,80,30,0.18); }
   .gauge-bar-fill { fill: #c8861f; }
   .gauge-bar-over { fill: #e0a83a; }
   .gauge-bar-neg { fill: #b53a2b; }
-  .gauge-bar-tick { stroke: rgba(138,90,43,0.55); stroke-width: 1.5; }
-  .gauge-bar-tick-label { fill: #7a4a1e; font-size: 15px; font-weight: 700; }
   .gauge-bar-knob { fill: #6a3a10; stroke: #fff4df; stroke-width: 2; }
-  .gauge-bar-arrow { fill: #e0a83a; }
 </style>
 
 <div id="card">
@@ -139,7 +151,7 @@
       {legend_html}
     </div>
     <div class="right">
-      <div class="desc-title">📜 公会印象</div>
+      <div class="desc-title">{impression_title}</div>
       <div class="desc">{description}</div>
     </div>
   </div>

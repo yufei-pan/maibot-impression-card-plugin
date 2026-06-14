@@ -112,7 +112,7 @@ def test_svg_generation() -> None:
     dims = [("熟悉度", 8.0), ("信赖度", 3.0), ("欢乐值", 12.0), ("麻烦度", -4.0), ("贴贴度", 6.0)]
     radar = affinity.build_radar_svg(dims, scale_max=10.0)
     assert radar.startswith("<svg") and radar.endswith("</svg>")
-    assert "radar-fill" in radar and "axis-label" in radar
+    assert "radar-sector-pos" in radar and "radar-sector-neg" in radar and "axis-label" in radar
     # 越界 / 负值不应导致空输出
     assert affinity.build_radar_svg([("x", 99.0)], scale_max=10.0).startswith("<svg")
     assert affinity.build_radar_svg([], scale_max=10.0) == ""
@@ -120,20 +120,23 @@ def test_svg_generation() -> None:
     # 量表条：标准范围、向右越界、向左（负值）越界
     gauge_norm = affinity.build_gauge_bar_svg(7.0, 10.0, 0.0)
     assert gauge_norm.startswith("<svg") and "gauge-bar-fill" in gauge_norm
-    assert "gauge-bar-tick-label" in gauge_norm
+    assert "gauge-bar-tick-label" not in gauge_norm
+    assert "gauge-bar-arrow" not in gauge_norm
+    assert "gauge-bar-zone" not in gauge_norm
     gauge_over = affinity.build_gauge_bar_svg(13.0, 10.0, 0.0)
     assert "gauge-bar-over" in gauge_over
     gauge_neg = affinity.build_gauge_bar_svg(-2.0, 10.0, 0.0)
     assert "gauge-bar-neg" in gauge_neg
-    # 极端越界应出现夹边箭头
-    assert "gauge-bar-arrow" in affinity.build_gauge_bar_svg(99.0, 10.0, 0.0)
-    assert "gauge-bar-arrow" in affinity.build_gauge_bar_svg(-99.0, 10.0, 0.0)
-    print("ok: svg generation (radar + gauge bar overflow & negative)")
+    # 极端越界：游标不再夹边，不出现箭头
+    assert "gauge-bar-arrow" not in affinity.build_gauge_bar_svg(99.0, 10.0, 0.0)
+    assert "gauge-bar-arrow" not in affinity.build_gauge_bar_svg(-99.0, 10.0, 0.0)
+    print("ok: svg generation (radar sectors + gauge bar overflow)")
 
 
 def test_templates_render_clean() -> None:
     placeholders = [
         "card_title", "avatar_html", "nickname", "alias_block", "cardname_block",
+        "bot_name", "impression_title",
         "total_label", "total_value", "gauge_bar", "radar_svg", "legend_html", "description",
     ]
     values = {p: f"<{p}>" for p in placeholders}

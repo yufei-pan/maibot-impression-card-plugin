@@ -4,7 +4,7 @@
 
 - ``/好感度 [@某人|名字]`` 生成并发送一张「冒险者公会卡」图片：
   左侧多维属性雷达图（任意多维，只显示最极端的 5 项）+ 好感度环形仪表，
-  右侧头像、QQ 昵称、麦麦给的别名、群名片与人物印象简介；
+  右侧头像、QQ 昵称、麦麦给的别名与人物印象简介；
 - 麦麦可调用工具给某人某一项加减分 / 设定分值，并以【系统通知】RPG 风格播报；
 - 麦麦可追加 / 覆盖人物简介，超长后台 LLM 精简（带人格与表达风格）；
 - 数值无上下限：高分顶出雷达边界、负分穿过圆心凹陷，越界更好玩；
@@ -253,14 +253,26 @@ def _coerce_float(value: Any, default: float) -> float:
 # --------------------------------------------------------------------------- #
 # SVG 生成（几何在 Python，配色由各 HTML 模板的 CSS 类控制）
 # --------------------------------------------------------------------------- #
+def _radar_sector_class(v0: float, v1: float, scale_max: float) -> str:
+    """按相邻两维分值决定扇区着色类。"""
+    if v0 < 0 or v1 < 0:
+        return "radar-sector-neg"
+    if v0 > scale_max or v1 > scale_max:
+        return "radar-sector-over"
+    return "radar-sector-pos"
+
+
 def build_radar_svg(dims: list[tuple[str, float]], scale_max: float, size: int = 360) -> str:
     """生成属性雷达图 SVG。
 
     数值线性映射半径，0 在圆心、scale_max 在外环；超过 scale_max 顶出外环，
     负数则穿过圆心落到对侧（凹陷），刻意制造越界的趣味。
 
-    使用的 CSS 类（由模板着色）：grid、axis、radar-fill、radar-stroke、
-    radar-vertex、axis-label、axis-value。
+    相邻维度围成的扇区分别上色（负值标红、超高标亮、其余为主题色），
+    再叠加上层轮廓线与顶点。
+
+    使用的 CSS 类（由模板着色）：grid、axis、radar-sector-pos/neg/over、
+    radar-stroke、radar-vertex、axis-label、axis-value。
     """
     n = len(dims)
     if n == 0 or scale_max <= 0:
@@ -280,6 +292,18 @@ def build_radar_svg(dims: list[tuple[str, float]], scale_max: float, size: int =
 
     parts: list[str] = [f'<svg viewBox="0 0 {size} {size}" xmlns="http://www.w3.org/2000/svg">']
 
+    # 扇区填色（先于网格绘制，作为底色）
+    for i in range(n):
+        v0 = dims[i][1]
+        v1 = dims[(i + 1) % n][1]
+        x0, y0 = point(v0, i)
+        x1, y1 = point(v1, (i + 1) % n)
+        sector_cls = _radar_sector_class(v0, v1, scale_max)
+        parts.append(
+            f'<polygon class="{sector_cls}" '
+            f'points="{cx:.1f},{cy:.1f} {x0:.1f},{y0:.1f} {x1:.1f},{y1:.1f}" />'
+        )
+
     # 网格环：外环（scale_max）与半环（scale_max/2）
     for ring_value in (scale_max, scale_max / 2.0):
         ring_pts = []
@@ -293,12 +317,12 @@ def build_radar_svg(dims: list[tuple[str, float]], scale_max: float, size: int =
         x, y = point(scale_max, i)
         parts.append(f'<line class="axis" x1="{cx:.1f}" y1="{cy:.1f}" x2="{x:.1f}" y2="{y:.1f}" />')
 
-    # 数据多边形
+    # 数据轮廓（仅描边，不填充）
     data_pts = []
     for i, (_, value) in enumerate(dims):
         x, y = point(value, i)
         data_pts.append(f"{x:.1f},{y:.1f}")
-    parts.append(f'<polygon class="radar-fill radar-stroke" points="{" ".join(data_pts)}" />')
+    parts.append(f'<polygon class="radar-stroke" fill="none" points="{" ".join(data_pts)}" />')
 
     # 顶点
     for i, (_, value) in enumerate(dims):
@@ -338,110 +362,82 @@ def build_gauge_bar_svg(
     scale_max: float,
     scale_min: float = 0.0,
     width: int = 640,
-    height: int = 86,
+    height: int = 64,
 ) -> str:
     """生成好感度横向量表条 SVG（一条，非环形，可双向越界）。
 
-    ``scale_min..scale_max``（默认 0..10）是标准量谱区间，居中高亮并标注刻度；
-    实际数值无上下限：超过 ``scale_max`` 向右溢出（gauge-bar-over），
-    低于 ``scale_min`` 向左溢出（gauge-bar-neg）。数值落在可显示范围之外时
-    游标夹到端点并补一个越界箭头。
+    ``scale_min..scale_max``（默认 0..10）是标准量谱区间；填充与游标不做夹边，
+    可越过条带两端甚至溢出视口（``overflow: visible``）。
 
-    使用的 CSS 类：gauge-bar-track、gauge-bar-zone、gauge-bar-fill、
-    gauge-bar-neg、gauge-bar-over、gauge-bar-tick、gauge-bar-tick-label、
-    gauge-bar-knob、gauge-bar-arrow。
+    使用的 CSS 类：gauge-bar-track、gauge-bar-fill、gauge-bar-neg、gauge-bar-over、
+    gauge-bar-knob。
     """
     if scale_max <= scale_min:
         scale_max = scale_min + DEFAULT_SCALE_MAX
     span = scale_max - scale_min
 
-    x_zero = width * 0.20  # 数值 == scale_min 的位置
-    x_full = width * 0.80  # 数值 == scale_max 的位置
-    left_edge = width * 0.045
-    right_edge = width * 0.955
+    x_zero = width * 0.08  # 数值 == scale_min
+    x_full = width * 0.92  # 数值 == scale_max
     unit = (x_full - x_zero) / span
 
-    bar_h = height * 0.30
-    bar_y = height * 0.22
+    bar_h = height * 0.38
+    bar_y = height * 0.31
     cy = bar_y + bar_h / 2.0
     r = bar_h / 2.0
 
     def coord(value: float) -> float:
         return x_zero + (value - scale_min) * unit
 
-    def clamp(value: float, low: float, high: float) -> float:
-        return max(low, min(high, value))
-
     raw_x = coord(total)
-    xt = clamp(raw_x, left_edge, right_edge)
-    off_high = raw_x > right_edge
-    off_low = raw_x < left_edge
 
-    parts: list[str] = [f'<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">']
+    parts: list[str] = [
+        f'<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" '
+        f'style="overflow:visible">'
+    ]
 
-    # 整条轨道（可显示的全谱）
+    # 标准量谱轨道（仅 0..scale_max，无两侧延伸阴影）
     parts.append(
-        f'<rect class="gauge-bar-track" x="{left_edge:.1f}" y="{bar_y:.1f}" '
-        f'width="{right_edge - left_edge:.1f}" height="{bar_h:.1f}" rx="{r:.1f}" />'
-    )
-    # 标准 0..scale_max 区间高亮
-    parts.append(
-        f'<rect class="gauge-bar-zone" x="{x_zero:.1f}" y="{bar_y:.1f}" '
+        f'<rect class="gauge-bar-track" x="{x_zero:.1f}" y="{bar_y:.1f}" '
         f'width="{x_full - x_zero:.1f}" height="{bar_h:.1f}" rx="{r:.1f}" />'
     )
 
-    # 填充
+    # 填充（可越过轨道端点）
     if total >= scale_min:
-        end_norm = min(xt, x_full)
-        if end_norm > x_zero:
+        end_x = raw_x
+        if end_x > x_zero:
+            fill_end = max(end_x, x_zero)
             parts.append(
                 f'<rect class="gauge-bar-fill" x="{x_zero:.1f}" y="{bar_y:.1f}" '
-                f'width="{end_norm - x_zero:.1f}" height="{bar_h:.1f}" rx="{r:.1f}" />'
+                f'width="{fill_end - x_zero:.1f}" height="{bar_h:.1f}" rx="{r:.1f}" />'
             )
-        if total > scale_max:
+        if total > scale_max and end_x > x_full:
             parts.append(
                 f'<rect class="gauge-bar-over" x="{x_full:.1f}" y="{bar_y:.1f}" '
-                f'width="{xt - x_full:.1f}" height="{bar_h:.1f}" rx="{r:.1f}" />'
+                f'width="{end_x - x_full:.1f}" height="{bar_h:.1f}" rx="{r:.1f}" />'
             )
-    else:
+    elif raw_x < x_zero:
         parts.append(
-            f'<rect class="gauge-bar-neg" x="{xt:.1f}" y="{bar_y:.1f}" '
-            f'width="{x_zero - xt:.1f}" height="{bar_h:.1f}" rx="{r:.1f}" />'
+            f'<rect class="gauge-bar-neg" x="{raw_x:.1f}" y="{bar_y:.1f}" '
+            f'width="{x_zero - raw_x:.1f}" height="{bar_h:.1f}" rx="{r:.1f}" />'
         )
 
-    # 刻度：scale_min / 中点 / scale_max
-    mid = (scale_min + scale_max) / 2.0
-    label_y = bar_y + bar_h + height * 0.21
-    for tick_value in (scale_min, mid, scale_max):
-        tx = coord(tick_value)
-        parts.append(
-            f'<line class="gauge-bar-tick" x1="{tx:.1f}" y1="{bar_y - 3:.1f}" '
-            f'x2="{tx:.1f}" y2="{bar_y + bar_h + 3:.1f}" />'
-        )
-        parts.append(
-            f'<text class="gauge-bar-tick-label" x="{tx:.1f}" y="{label_y:.1f}" '
-            f'text-anchor="middle">{_html_escape(_fmt_num(tick_value))}</text>'
-        )
-
-    # 数值游标
-    parts.append(f'<circle class="gauge-bar-knob" cx="{xt:.1f}" cy="{cy:.1f}" r="{bar_h*0.62:.1f}" />')
-
-    # 越界箭头
-    if off_high:
-        ax = right_edge + width * 0.010
-        parts.append(
-            f'<path class="gauge-bar-arrow" d="M{ax:.1f},{cy - bar_h*0.42:.1f} '
-            f'L{ax + width*0.022:.1f},{cy:.1f} L{ax:.1f},{cy + bar_h*0.42:.1f} Z" />'
-        )
-    elif off_low:
-        ax = left_edge - width * 0.010
-        parts.append(
-            f'<path class="gauge-bar-arrow" d="M{ax:.1f},{cy - bar_h*0.42:.1f} '
-            f'L{ax - width*0.022:.1f},{cy:.1f} L{ax:.1f},{cy + bar_h*0.42:.1f} Z" />'
-        )
+    # 数值游标（不夹边）
+    parts.append(f'<circle class="gauge-bar-knob" cx="{raw_x:.1f}" cy="{cy:.1f}" r="{bar_h*0.62:.1f}" />')
 
     parts.append("</svg>")
     return "".join(parts)
+
+
+def _wrap_card_html_for_render(fragment: str) -> str:
+    """包成完整 HTML 文档并加载中文字体（Playwright 渲染用）。"""
+    return (
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+        'family=Noto+Sans+SC:wght@400;700;800&display=swap">'
+        "</head><body>"
+        f"{fragment}"
+        "</body></html>"
+    )
 
 
 def build_legend_html(dims: list[tuple[str, float]]) -> str:
@@ -1258,7 +1254,7 @@ class AffinityPlugin(MaiBotPlugin):
         self._refresh_config()
         self._store = AffinityStore(self._resolve_store_path())
         self.ctx.logger.info(
-            "好感度插件已加载：维度=%s，数据=%s",
+            "印象卡片插件已加载：维度=%s，数据=%s",
             "、".join(d.label for d in self._dimensions),
             self._store.path,
         )
@@ -1269,7 +1265,7 @@ class AffinityPlugin(MaiBotPlugin):
         self._pending.clear()
         if self._store is not None:
             self._store.close()
-        self.ctx.logger.info("好感度插件已卸载")
+        self.ctx.logger.info("印象卡片插件已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
         del config_data
@@ -1281,7 +1277,7 @@ class AffinityPlugin(MaiBotPlugin):
             if self._store is not None:
                 self._store.close()
             self._store = AffinityStore(new_path)
-        self.ctx.logger.info("好感度插件配置已更新: version=%s", version)
+        self.ctx.logger.info("印象卡片插件配置已更新: version=%s", version)
 
     def normalize_plugin_config(self, config_data: Mapping[str, Any] | None) -> tuple[dict[str, Any], bool]:
         normalized, changed = super().normalize_plugin_config(config_data)
@@ -1742,7 +1738,7 @@ class AffinityPlugin(MaiBotPlugin):
         if ref.person_name:
             lines.append(f"- 别名：{ref.person_name}")
         if ref.group_cardname:
-            lines.append(f"- 群名片：{ref.group_cardname}")
+            lines.append(f"- 别名：{ref.group_cardname}")
         lines.append(f"- **{self._total_label}（总值）：{_fmt_num(record.total)}**")
         lines.append("")
         lines.append("| 维度 | 数值 |")
@@ -1772,7 +1768,7 @@ class AffinityPlugin(MaiBotPlugin):
         try:
             await self._generate_and_send_card(ref, stream_id)
         except Exception as exc:
-            self.ctx.logger.error("生成好感度卡失败: %s", exc, exc_info=True)
+            self.ctx.logger.error("生成印象卡片失败: %s", exc, exc_info=True)
             if stream_id:
                 await self.ctx.send.text("生成好感度卡时出错了……", stream_id)
             return False, "生成失败", 2
@@ -1794,7 +1790,7 @@ class AffinityPlugin(MaiBotPlugin):
             await self._refresh_record(ref, stream_id)
             await self._generate_and_send_card(ref, stream_id)
         except Exception as exc:
-            self.ctx.logger.error("刷新好感度失败: %s", exc, exc_info=True)
+            self.ctx.logger.error("刷新印象卡片失败: %s", exc, exc_info=True)
             if stream_id:
                 await self.ctx.send.text("刷新印象时出错了……", stream_id)
             return False, "刷新失败", 2
@@ -1972,13 +1968,15 @@ class AffinityPlugin(MaiBotPlugin):
                 avatar_html = f'<div class="avatar" style="background-color:{AVATAR_CHROMA_HTML_COLOR};"></div>'
             else:
                 avatar_html = self._static_avatar_html(ref, avatar_bytes, avatar_frames)
-            html = await self._build_card_html(ref, record, avatar_html)
+            html = _wrap_card_html_for_render(await self._build_card_html(ref, record, avatar_html))
             render_result = await self.ctx.render.html2png(
                 html,
                 selector="#card",
                 viewport=CARD_VIEWPORT,
                 device_scale_factor=CARD_DEVICE_SCALE,
                 omit_background=True,
+                allow_network=True,
+                wait_for_timeout_ms=800,
             )
             if isinstance(render_result, Mapping) and render_result.get("image_base64"):
                 base_png = b64decode(render_result["image_base64"])
@@ -2051,6 +2049,7 @@ class AffinityPlugin(MaiBotPlugin):
     async def _build_card_html(self, ref: PersonRef, record: AffinityRecord, avatar_html: str) -> str:
         template = self._load_card_template()
         card_title = _estr(self.config.card.card_title, DEFAULT_CARD_TITLE)
+        bot_name = await self.ctx.config.get("bot.nickname", "麦麦") or "麦麦"
         top_dims = self._top_dimensions(record)
         radar_svg = build_radar_svg(top_dims, self._scale_max)
         gauge_bar = build_gauge_bar_svg(record.total, self._scale_max, self._scale_min)
@@ -2068,7 +2067,9 @@ class AffinityPlugin(MaiBotPlugin):
             alias=_html_escape(alias),
             alias_block=f'<div class="alias">「{_html_escape(alias)}」</div>' if alias else "",
             cardname=_html_escape(cardname),
-            cardname_block=f'<div class="cardname">群名片：{_html_escape(cardname)}</div>' if cardname else "",
+            cardname_block=f'<div class="cardname">别名：{_html_escape(cardname)}</div>' if cardname else "",
+            bot_name=_html_escape(bot_name),
+            impression_title=_html_escape(f"{bot_name}的印象"),
             total_label=_html_escape(self._total_label),
             total_value=_fmt_num(record.total),
             gauge_bar=gauge_bar,
