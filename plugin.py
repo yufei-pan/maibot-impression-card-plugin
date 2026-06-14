@@ -56,7 +56,7 @@ _FONT_FACE_CSS_CACHE: str | None = None
 DEFAULT_SCORE = 5.0
 _SCORE_GUIDANCE_FOR_TOOLS = (
     "各维度与总值的默认中间值是 5；"
-    "虽无硬性上下限，但一般会在 0–10 之间浮动，极少数情况可故意越界。"
+    "虽无硬性上下限，但一般会在 0–10 之间浮动，少数情况可故意越界以达成夸张效果。"
 )
 DEFAULT_SCALE_MAX = 10.0
 DEFAULT_SCALE_MIN = 0.0
@@ -67,10 +67,10 @@ DEFAULT_RECENT_MESSAGES_LIMIT = 30
 DEFAULT_RADAR_TOP_N = 5
 DEFAULT_STORE_PATH = "data/affinity.sqlite3"
 
-DEFAULT_CARD_TITLE = "印象档案"
+DEFAULT_CARD_TITLE = "{bot_name}的印象档案"
 DEFAULT_CARD_TEMPLATE = "assets/parchment.html"
 
-# 出厂默认维度集（混合养成 / 抽象 meme / RPG 属性，共 16 项；可在 config.toml 任意增删改）。
+# 出厂默认维度集（混合养成 / 抽象 meme / RPG 属性，共 22 项，对齐大阿尔卡纳数量；可在 config.toml 任意增删改）。
 # 卡面雷达只显示其中最极端的 radar_top_n 项，所以维度多无妨。
 DEFAULT_DIMENSIONS: list[dict[str, str]] = [
     {"key": "familiarity", "label": "熟悉度", "description": "认识多久、了解多深"},
@@ -89,6 +89,12 @@ DEFAULT_DIMENSIONS: list[dict[str, str]] = [
     {"key": "luck", "label": "幸运", "description": "LUK，欧不欧、运气好不好"},
     {"key": "chaos", "label": "混沌", "description": "CHAOS，行为的不可预测程度"},
     {"key": "chuuni", "label": "中二度", "description": "中二、戏精、自我设定的浓度"},
+    {"key": "fate", "label": "缘分", "description": "和麦麦的宿命契合、羁绊深浅"},
+    {"key": "intuition", "label": "直觉", "description": "读空气、猜中麦麦心思的能力"},
+    {"key": "rebellion", "label": "反骨", "description": "叛逆、抬杠、不按麦麦剧本走的程度"},
+    {"key": "mystery", "label": "神秘", "description": "人设谜团、难以捉摸的程度"},
+    {"key": "devotion", "label": "虔诚", "description": "对麦麦或本群的忠诚与 devotion"},
+    {"key": "hope", "label": "希望", "description": "给麦麦带来的期待感与正向可能"},
 ]
 
 # 图片输出。
@@ -193,6 +199,15 @@ def _render(template: str, **values: Any) -> str:
     return rendered
 
 
+def _render_card_text_template(template: str, *, bot_name: str, person_name: str) -> str:
+    """渲染卡片标题类模板，支持 ``{bot_name}`` / ``{botname}`` / ``{person_name}``。"""
+    return (
+        template.replace("{bot_name}", bot_name)
+        .replace("{botname}", bot_name)
+        .replace("{person_name}", person_name)
+    )
+
+
 def _fmt_num(value: float) -> str:
     """好看地格式化分值：整数不带小数，否则保留一位小数。"""
     if abs(value - round(value)) < 1e-6:
@@ -288,9 +303,15 @@ def build_radar_svg(dims: list[tuple[str, float]], scale_max: float, size: int =
     if n == 0 or scale_max <= 0:
         return ""
 
-    cx = cy = size / 2.0
-    outer = size * 0.34  # value == scale_max 时的半径
-    label_r = outer + size * 0.085
+    # 左右留足边距，避免 text-anchor=start/end 的标签被 viewBox 裁切。
+    pad_x = size * 0.20
+    pad_y = size * 0.12
+    view_w = size + 2 * pad_x
+    view_h = size + 2 * pad_y
+    cx = pad_x + size / 2.0
+    cy = pad_y + size / 2.0
+    outer = size * 0.30  # value == scale_max 时的半径
+    label_r = outer + size * 0.075
 
     def angle(i: int) -> float:
         return -math.pi / 2.0 + 2.0 * math.pi * i / n
@@ -300,7 +321,10 @@ def build_radar_svg(dims: list[tuple[str, float]], scale_max: float, size: int =
         a = angle(i)
         return cx + r * math.cos(a), cy + r * math.sin(a)
 
-    parts: list[str] = [f'<svg viewBox="0 0 {size} {size}" xmlns="http://www.w3.org/2000/svg">']
+    parts: list[str] = [
+        f'<svg viewBox="0 0 {view_w:.1f} {view_h:.1f}" xmlns="http://www.w3.org/2000/svg" '
+        f'overflow="visible" preserveAspectRatio="xMidYMid meet">'
+    ]
 
     # 扇区填色（先于网格绘制，作为底色）
     for i in range(n):
@@ -738,7 +762,7 @@ class CardSectionConfig(PluginConfigBase):
     card_title: str | None = Field(
         default=None,
         json_schema_extra={"placeholder": DEFAULT_CARD_TITLE},
-        description="卡片顶部的公会名 / 标题。",
+        description="卡片顶部居中标题。支持占位符 {bot_name}、{person_name}（渲染时替换）。",
     )
     card_template: str | None = Field(
         default=None,
@@ -1166,12 +1190,17 @@ class PersonRef:
     user_id: str
     user_nickname: str = ""
     person_name: str = ""
-    group_cardname: str = ""
+    group_cardnames: list[str] = field(default_factory=list)
     memory_points: list[str] = field(default_factory=list)
 
     @property
     def display_name(self) -> str:
         return self.person_name or self.user_nickname or self.user_id or self.person_id
+
+    @property
+    def group_cardname(self) -> str:
+        """全部群名片合并为一行（顿号分隔），供 LLM 提示词等使用。"""
+        return "、".join(self.group_cardnames) if self.group_cardnames else ""
 
 
 def _resolve_stream_id(kwargs: dict[str, Any]) -> str:
@@ -1385,7 +1414,7 @@ class AffinityPlugin(MaiBotPlugin):
             user_id=str(info.get("user_id") or user_id or ""),
             user_nickname=str(info.get("user_nickname") or ""),
             person_name=str(info.get("person_name") or ""),
-            group_cardname=_first_group_cardname(info.get("group_cardname")),
+            group_cardnames=_parse_group_cardnames(info.get("group_cardname")),
             memory_points=_parse_memory_points(info.get("memory_points")),
         )
 
@@ -1772,7 +1801,7 @@ class AffinityPlugin(MaiBotPlugin):
             lines.append(f"- QQ 昵称：{ref.user_nickname}")
         if ref.person_name:
             lines.append(f"- 别名：{ref.person_name}")
-        if ref.group_cardname:
+        if ref.group_cardnames:
             lines.append(f"- 别名：{ref.group_cardname}")
         lines.append(f"- **{self._total_label}（总值）：{_fmt_num(record.total)}**")
         lines.append("")
@@ -2103,7 +2132,6 @@ class AffinityPlugin(MaiBotPlugin):
 
     async def _build_card_html(self, ref: PersonRef, record: AffinityRecord, avatar_html: str) -> str:
         template = self._load_card_template()
-        card_title = _estr(self.config.card.card_title, DEFAULT_CARD_TITLE)
         bot_name = await self.ctx.config.get("bot.nickname", "麦麦") or "麦麦"
         top_dims = self._top_dimensions(record)
         radar_svg = build_radar_svg(top_dims, self._scale_max)
@@ -2111,8 +2139,16 @@ class AffinityPlugin(MaiBotPlugin):
         legend_html = build_legend_html(top_dims)
 
         alias = ref.person_name or ""
-        cardname = ref.group_cardname or ""
+        cardname_text = ref.group_cardname
+        person_label = ref.person_name or ref.user_nickname or ref.display_name
         description = record.description.strip() or "（这个人还很神秘，暂无印象。）"
+        card_title_raw = _estr(self.config.card.card_title, DEFAULT_CARD_TITLE)
+        card_title = _render_card_text_template(
+            card_title_raw, bot_name=bot_name, person_name=person_label
+        )
+        impression_title = _render_card_text_template(
+            "{bot_name}对{person_name}的印象", bot_name=bot_name, person_name=person_label
+        )
 
         return _render(
             template,
@@ -2121,10 +2157,12 @@ class AffinityPlugin(MaiBotPlugin):
             nickname=_html_escape(ref.user_nickname or ref.display_name),
             alias=_html_escape(alias),
             alias_block=f'<div class="alias">「{_html_escape(alias)}」</div>' if alias else "",
-            cardname=_html_escape(cardname),
-            cardname_block=f'<div class="cardname">别名：{_html_escape(cardname)}</div>' if cardname else "",
+            cardname=_html_escape(cardname_text),
+            cardname_block=(
+                f'<div class="cardname">别名：{_html_escape(cardname_text)}</div>' if cardname_text else ""
+            ),
             bot_name=_html_escape(bot_name),
-            impression_title=_html_escape(f"{bot_name}的印象"),
+            impression_title=_html_escape(impression_title),
             total_label=_html_escape(self._total_label),
             total_value=_fmt_num(record.total),
             gauge_bar=gauge_bar,
@@ -2205,21 +2243,32 @@ def _parse_memory_points(raw: Any) -> list[str]:
     return []
 
 
-def _first_group_cardname(raw: Any) -> str:
+def _parse_group_cardnames(raw: Any) -> list[str]:
+    """从 PersonInfo 的 group_cardname 字段解析全部群名片。"""
     if raw is None:
-        return ""
+        return []
+    parsed: Any = raw
     if isinstance(raw, str) and raw.strip():
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            return raw.strip()
-    else:
-        parsed = raw
-    if isinstance(parsed, list) and parsed:
-        first = parsed[0]
-        if isinstance(first, Mapping):
-            return str(first.get("group_cardname") or "").strip()
-    return ""
+            return [raw.strip()]
+    names: list[str] = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, Mapping):
+                name = str(item.get("group_cardname") or "").strip()
+            else:
+                name = str(item or "").strip()
+            if name and name not in names:
+                names.append(name)
+    elif isinstance(parsed, Mapping):
+        name = str(parsed.get("group_cardname") or "").strip()
+        if name:
+            names.append(name)
+    elif isinstance(parsed, str) and parsed.strip():
+        names.append(parsed.strip())
+    return names
 
 
 def create_plugin() -> AffinityPlugin:

@@ -86,7 +86,7 @@ def test_config_toml_consistent() -> None:
 def test_resolve_dimensions_default() -> None:
     dims = affinity.resolve_dimensions(None)
     keys = [d.key for d in dims]
-    assert len(keys) == 16, keys
+    assert len(keys) == 22, keys
     assert keys[:5] == ["familiarity", "trust", "joy", "trouble", "clinginess"]
     assert {"abstract", "quality", "intelligence", "chaos", "chuuni"} <= set(keys)
     # 空列表也回退默认
@@ -96,7 +96,7 @@ def test_resolve_dimensions_default() -> None:
         [{"key": "a", "label": "甲"}, {"key": "a", "label": "重复"}, {"key": "b", "label": "乙"}]
     )
     assert [d.key for d in custom] == ["a", "b"]
-    print("ok: resolve_dimensions default (16) & dedup")
+    print("ok: resolve_dimensions default (22) & dedup")
 
 
 def test_effective_helpers() -> None:
@@ -272,7 +272,10 @@ def test_helpers() -> None:
     assert affinity._extract_json_object("```json\n{\"x\": 2}\n```") == {"x": 2}
     assert affinity._extract_json_object("no json here") is None
     assert affinity._parse_memory_points('["甲", "乙"]') == ["甲", "乙"]
-    assert affinity._first_group_cardname('[{"group_id": "1", "group_cardname": "小麦"}]') == "小麦"
+    assert affinity._parse_group_cardnames(
+        '[{"group_id": "1", "group_cardname": "小麦"}, {"group_id": "2", "group_cardname": "大麦"}]'
+    ) == ["小麦", "大麦"]
+    assert affinity._parse_group_cardnames("单群名片") == ["单群名片"]
     assert affinity._sniff_image_mime(b"\xff\xd8\xff\xe0") == "image/jpeg"
     print("ok: misc helpers")
 

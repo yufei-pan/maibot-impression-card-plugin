@@ -30,14 +30,15 @@ config_version = "0.2.0"
 # store_path = "data/affinity.sqlite3"
 
 # 好感度子项维度（可任意多项；卡面只显示最极端的 radar_top_n 项）。
-# 默认不写任何 [[dimensions]]，使用插件内置的 16 项默认维度（混合养成 / 抽象 meme / RPG 属性），
+# 默认不写任何 [[dimensions]]，使用插件内置的 22 项默认维度（混合养成 / 抽象 meme / RPG 属性，对齐大阿尔卡纳数量），
 # 这样插件升级新增维度时你也能自动用上。需要自定义时，取消下面注释照葫芦画瓢增删即可。
 # 改 label / 顺序而保持 key 不变不会丢数据；改 key 视为新维度（旧值默认保留在库中）。
 #
-# 内置默认 16 项（key — label）：
+# 内置默认 22 项（key — label）：
 #   familiarity熟悉度 trust信赖度 joy欢乐值 trouble麻烦度 clinginess贴贴度
 #   abstract抽象度 quality含金量 wavelength电波 threat威胁度 generosity慷慨度
 #   intelligence智力 charm魅力 vitality活跃 luck幸运 chaos混沌 chuuni中二度
+#   fate缘分 intuition直觉 rebellion反骨 mystery神秘 devotion虔诚 hope希望
 #
 # [[dimensions]]
 # key = "familiarity"
@@ -50,8 +51,8 @@ config_version = "0.2.0"
 # description = "发言抽象、逆天、不可名状的程度"
 
 [card]
-# 卡片顶部居中的标题。
-# card_title = "印象档案"
+# 卡片顶部居中的标题。支持占位符 {bot_name}、{person_name}。
+# card_title = "{bot_name}的印象档案"
 # 卡片 HTML 模板路径，相对插件目录解析。
 # 内置：assets/parchment.html（羊皮纸）、assets/holo.html（全息科技）、assets/cute.html（可爱贴纸）。
 # 指向你自己的 html 即可完全自定义（占位符见各内置模板顶部注释）。

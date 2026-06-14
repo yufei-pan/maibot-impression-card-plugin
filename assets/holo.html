@@ -46,7 +46,7 @@
   .names { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .nickname { font-size: 23px; font-weight: 800; color: #eaffff; text-shadow: 0 0 10px rgba(90,220,255,0.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .alias { font-size: 15px; color: #9fdcff; }
-  .cardname { font-size: 12px; color: #7fb8d8; }
+  .cardname { font-size: 12px; color: #7fb8d8; white-space: normal; word-break: break-all; }
 
   .score-label { font-size: 13px; color: #9fdcff; letter-spacing: 1px; }
   .score-value { font-size: 40px; font-weight: 800; color: #74e9ff; line-height: 1.05; text-shadow: 0 0 14px rgba(80,220,255,0.6); }
@@ -55,13 +55,14 @@
   .gauge { padding: 2px 8px 14px; overflow: visible; }
   .gauge svg { width: 100%; height: auto; display: block; overflow: visible; }
 
-  .body { display: flex; border-top: 1px solid rgba(90,220,255,0.35); border-radius: 0 0 18px 18px; overflow: hidden; }
+  .body { display: flex; border-top: 1px solid rgba(90,220,255,0.35); border-radius: 0 0 18px 18px; overflow: visible; }
   .left {
     width: 45%; padding: 18px 16px 22px;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     border-right: 1px solid rgba(90,220,255,0.3);
   }
-  .left .radar { width: 100%; max-width: 340px; }
+  .left .radar { width: 100%; max-width: 340px; overflow: visible; }
+  .left .radar svg { display: block; width: 100%; height: auto; overflow: visible; }
   .right { flex: 1; padding: 20px 26px 24px; display: flex; flex-direction: column; }
 
   .desc-title { font-size: 16px; font-weight: 700; color: #74e9ff; margin-bottom: 8px; letter-spacing: 1px; }
