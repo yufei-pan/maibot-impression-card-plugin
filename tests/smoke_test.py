@@ -287,6 +287,35 @@ def test_helpers() -> None:
             "evidence": [{"content": "经常深夜发消息"}],
         }
     ) == ["经常深夜发消息"]
+    assert affinity._memory_points_from_knowledge_content(
+        "你知道这些知识: 1. 爱开玩笑\n2. 写代码"
+    ) == ["爱开玩笑", "写代码"]
+    assert affinity._memory_points_from_knowledge_content("你不太了解有关 foo 的知识") == []
+    assert affinity._memory_search_queries(
+        affinity.PersonRef(
+            person_id="p1",
+            platform="qq",
+            user_id="99",
+            user_nickname="Nick",
+            person_name="Alias",
+            group_cardnames=["CardA"],
+        ),
+        include_facets=True,
+    ) == ["Alias", "Nick", "CardA", "99", "人物印象", "性格特点", "兴趣爱好", "行为习惯", "社交关系", "经历事件"]
+    assert affinity._memory_search_queries(
+        affinity.PersonRef(
+            person_id="p1",
+            platform="qq",
+            user_id="99",
+            user_nickname="Nick",
+            person_name="Alias",
+            group_cardnames=["CardA"],
+        ),
+        include_facets=False,
+    ) == ["Alias", "Nick", "CardA", "99"]
+    assert affinity._format_memory_block(["甲", "乙"], max_chars=100) == "  - 甲\n  - 乙"
+    assert affinity._format_memory_block([], max_chars=100) == "  （无）"
+    assert affinity._merge_memory_points(["甲"], ["乙", "甲"], max_items=10) == ["甲", "乙"]
     assert affinity._parse_group_cardnames(
         '[{"group_id": "1", "group_cardname": "小麦"}, {"group_id": "2", "group_cardname": "大麦"}]'
     ) == ["小麦", "大麦"]

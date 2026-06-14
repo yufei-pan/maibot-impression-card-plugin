@@ -39,7 +39,7 @@
     "config.get",
     "llm.generate",
     "database.get",
-    "memory.get_person_profile",
+    "knowledge.search",
     "person.get_id",
     "person.get_id_by_name",
     "person.get_value",

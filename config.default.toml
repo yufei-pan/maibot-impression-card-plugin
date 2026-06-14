@@ -111,8 +111,14 @@ config_version = "0.2.1"
 # max_tokens = 0
 # 冷启动 / 刷新提示词模板。占位符：
 # {nickname}{personality}{reply_style}{name}{task_intro}{total_label}{dimensions_doc}{scores_keys_doc}
-# {person_identities}{user_nickname}{group_cardname}{memory_points}{recent_chat}{refresh_guidance}{existing_block}{size_limit}
+# {person_identities}{user_nickname}{group_cardname}{memory_points}{memory_block}{recent_chat}{refresh_guidance}{existing_block}{size_limit}
 # prompt_template = ""
+# 每次 knowledge.search 单次返回条数（search+aggregate 各调一次；默认 50）。
+# memory_search_limit = 50
+# 写入提示词的长期记忆条目总数上限（合并去重后；单条通常很短，默认 200）。
+# memory_max_items = 200
+# 写入提示词的长期记忆总字符上限（默认 16384，一般不必动）。
+# memory_max_chars = 16384
 # 仅刷新印象时插入的评估指引（冷启动不会插入）；留空则用内置默认。
 # refresh_guidance = ""
 # 仅刷新印象时使用的采样温度；留空则沿用 temperature。可略调高以增加重评幅度。

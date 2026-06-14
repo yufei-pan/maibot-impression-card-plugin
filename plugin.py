@@ -173,7 +173,8 @@ DEFAULT_COLD_START_PROMPT_TEMPLATE = """你是{nickname}。
 
 关于这个人你已知的信息：
 {person_identities}
-- 你的印象记忆：{memory_points}
+- 长期记忆（请综合参考，不必逐条照搬）：
+{memory_block}
 - 最近的聊天记录：
   - 请求中quote后面跟的是消息id，指用户对之前的同一id消息进行了引用。
   - 在聊天记录中，不同的人正在互动，（{nickname}也是一位参与的用户），请注意辨别不同用户的身份。
@@ -183,6 +184,15 @@ DEFAULT_COLD_START_PROMPT_TEMPLATE = """你是{nickname}。
 {{"total": 数字, "scores": {{{scores_keys_doc}}}, "description": "用你的口吻写的人物简介，{size_limit}字以内"}}"""
 
 DEFAULT_REFRESH_GUIDANCE = """【刷新评估】这是一次全面重算，不是微调旧分。请优先依据「印象记忆」与「最近聊天记录」重新判断你对 ta 的真实感受；下方旧档案仅供参考，各项分数与简介都可以明显上升或下降，不要惯性膨胀，也不要死守先入为主的旧印象。"""
+
+# 从 A_Memorix（经 knowledge.search）拉取长期记忆时的默认上限。
+DEFAULT_MEMORY_SEARCH_LIMIT = 50
+DEFAULT_MEMORY_MAX_ITEMS = 200
+DEFAULT_MEMORY_MAX_CHARS = 16384
+# 经 knowledge.search 拉长期记忆。仅用 search/aggregate：hybrid/episode/time 在 A_Memorix
+# 并行或部分路径下易报 tuple/SQLite 错，且 impression 场景收益有限。
+MEMORY_SEARCH_MODES = ("search", "aggregate")
+MEMORY_FACET_QUERIES = ("人物印象", "性格特点", "兴趣爱好", "行为习惯", "社交关系", "经历事件")
 
 # 系统通知。
 DEFAULT_NOTIFY_ENABLED = True
@@ -1082,7 +1092,22 @@ class ColdStartSectionConfig(PluginConfigBase):
     prompt_template: str = Field(
         default="",
         json_schema_extra={"placeholder": DEFAULT_COLD_START_PROMPT_TEMPLATE},
-        description="冷启动 / 刷新提示词模板。占位符：{nickname}{personality}{reply_style}{name}{task_intro}{total_label}{dimensions_doc}{scores_keys_doc}{person_identities}{user_nickname}{group_cardname}{memory_points}{recent_chat}{refresh_guidance}{existing_block}{size_limit}。",
+        description="冷启动 / 刷新提示词模板。占位符：{nickname}{personality}{reply_style}{name}{task_intro}{total_label}{dimensions_doc}{scores_keys_doc}{person_identities}{user_nickname}{group_cardname}{memory_points}{memory_block}{recent_chat}{refresh_guidance}{existing_block}{size_limit}。",
+    )
+    memory_search_limit: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_MEMORY_SEARCH_LIMIT)},
+        description="每次 knowledge.search 返回条数上限（多种检索模式会多次调用；条目短时可主要调 memory_max_items）。",
+    )
+    memory_max_items: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_MEMORY_MAX_ITEMS)},
+        description="写入提示词的长期记忆条目总数上限（合并去重后）。",
+    )
+    memory_max_chars: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_MEMORY_MAX_CHARS)},
+        description="写入提示词的长期记忆总字符上限（极少触顶时可只调 memory_max_items）。",
     )
     refresh_guidance: str = Field(
         default="",
@@ -1683,9 +1708,10 @@ class AffinityPlugin(MaiBotPlugin):
         if not isinstance(info, Mapping):
             if not (platform and user_id):
                 return None
-            return PersonRef(person_id=person_id, platform=platform, user_id=user_id)
-        memory_points = await self._load_memory_points(person_id, info.get("memory_points"))
-        return PersonRef(
+            ref = PersonRef(person_id=person_id, platform=platform, user_id=user_id)
+            ref.memory_points = await self._load_memory_points(ref, None)
+            return ref
+        ref = PersonRef(
             person_id=person_id,
             platform=str(info.get("platform") or platform or "qq"),
             user_id=str(info.get("user_id") or user_id or ""),
@@ -1693,34 +1719,104 @@ class AffinityPlugin(MaiBotPlugin):
             person_name=str(info.get("person_name") or ""),
             group_cardnames=_parse_group_cardnames(info.get("group_cardname")),
             group_cardname_entries=_parse_group_cardname_entries(info.get("group_cardname")),
-            memory_points=memory_points,
         )
+        ref.memory_points = await self._load_memory_points(ref, info.get("memory_points"))
+        return ref
 
-    async def _load_memory_points(self, person_id: str, db_raw: Any) -> list[str]:
-        """从 PersonInfo 或 A_Memorix 人物画像加载印象记忆，供冷启动 / 刷新提示词使用。"""
-        points = _parse_memory_points(db_raw)
-        if points:
-            return points
-        try:
-            value = await self.ctx.person.get_value(person_id, "memory_points")
-            if not isinstance(value, dict):
-                points = _parse_memory_points(value)
-                if points:
-                    return points
-        except Exception as exc:
-            self.ctx.logger.debug("person.get_value(memory_points) 失败 person_id=%s: %s", person_id, exc)
-        try:
-            profile = await self.ctx.call_capability(
-                "memory.get_person_profile",
-                person_id=person_id,
-                limit=12,
+    async def _load_memory_points(self, ref: PersonRef, db_raw: Any) -> list[str]:
+        """从 PersonInfo 与 A_Memorix（经 knowledge.search）加载长期记忆，供冷启动 / 刷新提示词使用。"""
+        cold = self.config.cold_start
+        max_items = _eint(cold.memory_max_items, DEFAULT_MEMORY_MAX_ITEMS, minimum=1)
+        legacy_points = _parse_memory_points(db_raw)
+        if not legacy_points:
+            try:
+                value = await self.ctx.person.get_value(ref.person_id, "memory_points")
+                if not isinstance(value, dict):
+                    legacy_points = _parse_memory_points(value)
+            except Exception as exc:
+                self.ctx.logger.debug("person.get_value(memory_points) 失败 person_id=%s: %s", ref.person_id, exc)
+        memorix_points = await self._memory_points_from_memorix_search(ref)
+        points = _merge_memory_points(legacy_points, memorix_points, max_items=max_items)
+        if not points:
+            self.ctx.logger.info(
+                "未加载到印象记忆 person_id=%s display_name=%s（已尝试 PersonInfo、person.get_value、knowledge.search）",
+                ref.person_id,
+                ref.display_name,
             )
-            points = _memory_points_from_profile(profile if isinstance(profile, Mapping) else {})
-            if points:
-                return points
+        elif memorix_points:
+            self.ctx.logger.debug(
+                "已加载长期记忆 person_id=%s legacy=%d memorix=%d merged=%d",
+                ref.person_id,
+                len(legacy_points),
+                len(memorix_points),
+                len(points),
+            )
+        return points
+
+    async def _fetch_knowledge_memory(
+        self, person_id: str, query: str, mode: str, limit: int
+    ) -> list[str]:
+        kwargs: dict[str, Any] = {
+            "query": query,
+            "person_id": person_id,
+            "limit": limit,
+            "mode": mode,
+            "respect_filter": False,
+        }
+        if mode == "time":
+            # 已禁用 time 模式；保留分支供日后恢复。
+            return []
+        try:
+            content = await self.ctx.call_capability("knowledge.search", **kwargs)
         except Exception as exc:
-            self.ctx.logger.debug("memory.get_person_profile 失败 person_id=%s: %s", person_id, exc)
-        return []
+            self.ctx.logger.debug(
+                "knowledge.search 失败 person_id=%s query=%s mode=%s: %s",
+                person_id,
+                query,
+                mode,
+                exc,
+            )
+            return []
+        return _memory_points_from_knowledge_content(content)
+
+    async def _memory_points_from_memorix_search(self, ref: PersonRef) -> list[str]:
+        """通过 Host 内置 knowledge.search（底层 A_Memorix）检索人物相关长期记忆。
+
+        串行调用 search/aggregate，避免 A_Memorix 在并行 + episode/hybrid 路径下刷 SQLite 报错。
+        """
+        cold = self.config.cold_start
+        per_limit = _eint(cold.memory_search_limit, DEFAULT_MEMORY_SEARCH_LIMIT, minimum=1)
+        max_items = _eint(cold.memory_max_items, DEFAULT_MEMORY_MAX_ITEMS, minimum=1)
+        primary_queries = _memory_search_queries(ref, include_facets=False)
+        facet_queries = _memory_search_queries(ref, include_facets=True)[len(primary_queries) :]
+        merged: list[str] = []
+        seen: set[str] = set()
+
+        def absorb(batch: list[str]) -> None:
+            for item in batch:
+                key = _memory_dedupe_key(item)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+
+        for query in primary_queries:
+            for mode in MEMORY_SEARCH_MODES:
+                absorb(await self._fetch_knowledge_memory(ref.person_id, query, mode, per_limit))
+                if len(merged) >= max_items:
+                    return merged
+
+        min_before_facets = max(16, max_items // 2)
+        if len(merged) >= min_before_facets:
+            return merged[:max_items]
+
+        for query in facet_queries:
+            for mode in MEMORY_SEARCH_MODES:
+                absorb(await self._fetch_knowledge_memory(ref.person_id, query, mode, per_limit))
+                if len(merged) >= max_items:
+                    return merged[:max_items]
+
+        return merged[:max_items]
 
     async def _resolve_target(self, target: str, kwargs: dict[str, Any]) -> tuple[Optional[PersonRef], str]:
         """把工具/命令里的 target 解析成 PersonRef。
@@ -2349,6 +2445,11 @@ class AffinityPlugin(MaiBotPlugin):
         refresh_guidance = self._refresh_guidance_block(is_refresh)
         task_intro = "重新评估并更新" if is_refresh else "建立"
         stored_display_name = str(existing.display_name or "").strip() if existing else ""
+        memory_max_chars = _eint(
+            self.config.cold_start.memory_max_chars, DEFAULT_MEMORY_MAX_CHARS, minimum=256
+        )
+        memory_block = _format_memory_block(ref.memory_points, max_chars=memory_max_chars)
+        memory_points = memory_block if ref.memory_points else "（无）"
 
         prompt = _render(
             template,
@@ -2363,7 +2464,8 @@ class AffinityPlugin(MaiBotPlugin):
             person_identities=_format_person_identities(ref, stored_display_name=stored_display_name),
             user_nickname=ref.user_nickname or "（未知）",
             group_cardname=ref.group_cardname or "（无）",
-            memory_points="；".join(ref.memory_points) if ref.memory_points else "（无）",
+            memory_points=memory_points,
+            memory_block=memory_block,
             recent_chat=recent_chat or "（无）",
             refresh_guidance=refresh_guidance,
             existing_block=existing_block,
@@ -2683,6 +2785,99 @@ def _parse_memory_points(raw: Any) -> list[str]:
             return [point for point in (_parse_memory_point_item(item) for item in parsed) if point]
         return [_parse_memory_point_item(parsed)]
     return []
+
+
+def _memory_search_queries(ref: PersonRef, *, include_facets: bool = True) -> list[str]:
+    """构造用于 knowledge.search 的查询词（昵称、别名、群名片等）。"""
+    queries: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        key = text.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        queries.append(text)
+
+    add(ref.display_name)
+    add(ref.person_name)
+    add(ref.user_nickname)
+    for card in ref.group_cardnames:
+        add(card)
+    add(ref.user_id)
+    if include_facets:
+        for facet in MEMORY_FACET_QUERIES:
+            add(facet)
+    return queries
+
+
+def _memory_dedupe_key(text: str) -> str:
+    normalized = str(text or "").strip().casefold()
+    if len(normalized) > 120:
+        normalized = normalized[:120]
+    return normalized
+
+
+def _merge_memory_points(*groups: list[str], max_items: int) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            key = _memory_dedupe_key(item)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+            if len(merged) >= max_items:
+                return merged
+    return merged
+
+
+def _format_memory_block(items: list[str], *, max_chars: int, indent: str = "  ") -> str:
+    """格式化长期记忆块；子条目相对「长期记忆」标题缩进一级。"""
+    if not items:
+        return f"{indent}（无）"
+    lines: list[str] = []
+    used = 0
+    truncate_line = f"{indent}- …（后续记忆已截断）"
+    for item in items:
+        line = f"{indent}- {item}"
+        extra = len(line) + (1 if lines else 0)
+        if used + extra > max_chars:
+            if used + len(truncate_line) + (1 if lines else 0) <= max_chars:
+                lines.append(truncate_line)
+            break
+        lines.append(line)
+        used += extra
+    return "\n".join(lines)
+
+
+def _memory_points_from_knowledge_content(content: Any) -> list[str]:
+    """从 knowledge.search 返回的文本中解析记忆条目。"""
+    text = str(content or "").strip()
+    if not text or "你不太了解" in text:
+        return []
+    for prefix in ("你知道这些知识:", "你知道这些知识："):
+        if text.startswith(prefix):
+            text = text[len(prefix) :].strip()
+            break
+    points: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line[0].isdigit():
+            dot = line.find(".")
+            if 0 <= dot <= 3:
+                line = line[dot + 1 :].strip()
+        if line.endswith("..."):
+            line = line[:-3].rstrip()
+        if line:
+            points.append(line)
+    return points
 
 
 def _memory_points_from_profile(profile: Mapping[str, Any]) -> list[str]:
