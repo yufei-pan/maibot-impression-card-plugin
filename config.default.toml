@@ -7,7 +7,7 @@
 # 是否启用插件
 enabled = true
 # 配置版本
-config_version = "0.2.0"
+config_version = "0.2.1"
 
 [general]
 # 好感度总值的显示名。
@@ -23,7 +23,7 @@ config_version = "0.2.0"
 # 雷达图最多显示几项（按偏离中间值最远，即最极端的项优先；其余维度仍会记录）。
 # radar_top_n = 5
 # 冷启动 / 刷新印象时参考的最近聊天条数。
-# recent_messages_limit = 30
+# recent_messages_limit = 1024
 # 从配置删除某维度时，是否同时从数据库清掉该维度的历史分值（默认保留）。
 # prune_removed_dimensions = false
 # SQLite 数据文件路径；相对路径基于插件目录解析（跨私聊/群聊共用一份）。
@@ -84,8 +84,12 @@ config_version = "0.2.0"
 # send_as_emoji = false
 
 [description]
-# 人物简介字符上限；超过后后台触发 LLM 精简。
-# size_limit = 200
+# 卡面印象笔记字符上限；persistent_impression 开启时超出会在发卡时用 LLM 精简显示（不改库）。
+# size_limit = 256
+# 印象笔记存储字节上限（UTF-8）；persistent_impression 开启时超出后强制 LLM 精简并写回数据库。
+# impression_note_size_limit = 81920
+# 持久化印象笔记：库中可累积长文；发卡时若超 size_limit 则 LLM 精简卡面显示而不改库。关闭时忽略 impression_note_size_limit，仅用 size_limit。
+# persistent_impression = true
 # 精简简介使用的 LLM 模型任务名。
 # compact_model = "planner"
 # 精简简介的采样温度。
@@ -95,7 +99,7 @@ config_version = "0.2.0"
 # 精简仍超限时的最大重试次数。
 # max_compact_attempts = 3
 # 精简简介的提示词模板。
-# 占位符：{nickname}{personality}{reply_style}{name}{used}{size_limit}{description}
+# 占位符：{nickname}{personality}{reply_style}{name}{used}{limit_label}{description}
 # compact_prompt_template = ""
 
 [cold_start]

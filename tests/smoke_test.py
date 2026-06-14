@@ -276,6 +276,15 @@ def test_helpers() -> None:
         '[{"group_id": "1", "group_cardname": "小麦"}, {"group_id": "2", "group_cardname": "大麦"}]'
     ) == ["小麦", "大麦"]
     assert affinity._parse_group_cardnames("单群名片") == ["单群名片"]
+    assert affinity._text_byte_len("你好") == 6
+    assert affinity._text_within_limit("abc", 3, "chars")
+    assert affinity._limit_label(256, "chars") == "256 字符"
+    assert affinity._limit_label(81920, "bytes") == "81920 字节"
+    assert affinity._truncate_text("abcdef", 4, "chars") == "abc…"
+    assert affinity.DEFAULT_DESCRIPTION_SIZE_LIMIT == 256
+    assert affinity.DEFAULT_IMPRESSION_NOTE_SIZE_LIMIT == 81920
+    assert affinity.DEFAULT_RECENT_MESSAGES_LIMIT == 1024
+    assert affinity.DEFAULT_PERSISTENT_IMPRESSION is True
     assert affinity._sniff_image_mime(b"\xff\xd8\xff\xe0") == "image/jpeg"
     print("ok: misc helpers")
 

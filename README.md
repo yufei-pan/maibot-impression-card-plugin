@@ -23,6 +23,7 @@
   | `rewrite_impression` | 覆盖人物印象笔记 |
   | `get_impression_detail` | 以 Markdown 返回某人的完整档案 |
   | `refresh_impression` | 结合 PersonInfo 印象 + 最近聊天 + 既有数据重算分值与简介 |
+  | `send_impression_card` | 向当前聊天主动发送印象卡片图片（同 `/卡片` 卡面；可选先刷新） |
 
   > 工具的 `target` 传对方 QQ 号或名字；省略则默认当前正在对话的发言者。`dimension` 传 `total`（好感度总值）或某个维度 key。
 
@@ -37,6 +38,16 @@
   - 改 `label` / 顺序而保持 `key` 不变**不会丢数据**；改 `key` 视为新维度（旧值默认保留）。
   - 新增维度、未评分项、未生成用户的**默认值统一为 5（中间值）**。
 - 卡面雷达图只画**偏离中间值最远（最极端）**的 `radar_top_n` 项，其余维度照常记录。
+
+## 印象笔记与持久化
+
+- **`size_limit`（默认 256 字符）**：卡面右侧印象笔记的显示上限。
+- **`impression_note_size_limit`（默认 81920 字节）**：`persistent_impression` 开启时的数据库存储上限；超出后强制 LLM 精简并写回。
+- **`persistent_impression`（默认开启）**：
+  - 库中可累积长文（在 `impression_note_size_limit` 内）；`append_impression` / `rewrite_impression` 逻辑相同。
+  - 生成卡片时若超出 `size_limit`，**临时**用 LLM 精简卡面显示，**不改数据库**。
+  - 超出 `impression_note_size_limit` 时，后台 LLM 精简并**写回数据库**（与 append / rewrite 无关）。
+- **关闭 `persistent_impression`**：忽略 `impression_note_size_limit`，沿用旧行为——以 `size_limit` 为唯一上限，超出后在写入时后台精简入库；卡面直接读库。
 
 ## 图片格式
 
@@ -73,7 +84,7 @@
 ## 关于「从记忆系统调取信息」
 
 新用户（库里没有）或刷新时，麦麦会结合 `PersonInfo.memory_points`（A_Memorix 维护的印象要点）、
-`person_name`、`group_cardname` 与最近 N 条聊天记录，由 LLM（带麦麦人格与表达风格）一次性生成
+`person_name`、`group_cardname` 与最近 N 条聊天记录（默认 1024 条），由 LLM（带麦麦人格与表达风格）一次性生成
 各维度分值与简介。
 
 > A_Memorix 的检索能力只对外暴露为 LLM 工具、未提供插件间 `@API`，因此本插件取用的是上述可直接

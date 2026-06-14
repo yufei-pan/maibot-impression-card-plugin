@@ -6,7 +6,8 @@
   左侧多维属性雷达图（任意多维，只显示最极端的 5 项）+ 好感度环形仪表，
   右侧头像、QQ 昵称、麦麦给的别名与人物印象简介；
 - 麦麦可调用工具给某人某一项加减分 / 设定分值，并以【系统通知】RPG 风格播报；
-- 麦麦可追加 / 覆盖人物简介，超长后台 LLM 精简（带人格与表达风格）；
+- 麦麦可调用工具主动发送某人的印象卡片图片（与 /卡片 相同卡面）；
+- 麦麦可追加 / 覆盖人物简介；持久化模式下可累积长文，发卡时 LLM 精简卡面显示，超存储上限才写回精简；
 - 数值无上下限：高分顶出雷达边界、负分穿过圆心凹陷，越界更好玩；
 - 数据存于插件本地 SQLite，按 person_id 主键，跨私聊/群聊共用一份；
 - 新用户（库中没有）会结合 PersonInfo 印象与最近聊天，由 LLM 冷启动生成参数与简介。
@@ -39,7 +40,7 @@ from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.config import validate_plugin_config
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-CURRENT_CONFIG_VERSION = "0.2.0"
+CURRENT_CONFIG_VERSION = "0.2.1"
 SHIPPED_CONFIG_TEMPLATE_NAME = "config.default.toml"
 _PLUGIN_ROOT = Path(__file__).resolve().parent
 _CARD_FONT_FILES = (
@@ -81,7 +82,7 @@ DEFAULT_SCALE_MIN = 0.0
 DEFAULT_TOTAL_LABEL = "好感度"
 DEFAULT_ALLOW_QUERY_OTHERS = True
 DEFAULT_PRUNE_REMOVED_DIMENSIONS = False
-DEFAULT_RECENT_MESSAGES_LIMIT = 30
+DEFAULT_RECENT_MESSAGES_LIMIT = 1024
 DEFAULT_RADAR_TOP_N = 5
 DEFAULT_STORE_PATH = "data/affinity.sqlite3"
 
@@ -134,7 +135,9 @@ DEFAULT_SEND_AS_EMOJI = False
 AVATAR_CHROMA_HTML_COLOR = "#ff00ff"
 
 # 人物简介。
-DEFAULT_DESCRIPTION_SIZE_LIMIT = 200
+DEFAULT_DESCRIPTION_SIZE_LIMIT = 256
+DEFAULT_IMPRESSION_NOTE_SIZE_LIMIT = 81920
+DEFAULT_PERSISTENT_IMPRESSION = True
 DEFAULT_COMPACT_MODEL = "planner"
 DEFAULT_COMPACT_TEMPERATURE = 0.4
 DEFAULT_COMPACT_MAX_TOKENS = 0  # 0 = 自动按上限计算
@@ -145,7 +148,7 @@ DEFAULT_COMPACT_PROMPT_TEMPLATE = """你是{nickname}。
 你的人格设定：{personality}
 你的表达风格：{reply_style}
 
-下面这段你对群友「{name}」的印象简介太长了：当前 {used} 字符，必须精简到 {size_limit} 字符以内。
+下面这段你对群友「{name}」的印象简介太长了：当前 {used}，必须精简到 {limit_label} 以内。
 请你以{nickname}的身份、用你的口吻重写这段简介，保留最核心的人物特征与你的态度，让它更精炼有趣。
 只输出精简后的简介正文本身，不要输出任何解释、前言或额外说明。
 
@@ -205,6 +208,40 @@ CARD_RADAR_SVG_SIZE = 400
 # --------------------------------------------------------------------------- #
 # 通用小工具
 # --------------------------------------------------------------------------- #
+def _text_byte_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _text_used(text: str, limit_unit: str) -> str:
+    if limit_unit == "bytes":
+        return f"{_text_byte_len(text)} 字节"
+    return f"{len(text)} 字符"
+
+
+def _text_within_limit(text: str, limit: int, limit_unit: str) -> bool:
+    if limit_unit == "bytes":
+        return _text_byte_len(text) <= limit
+    return len(text) <= limit
+
+
+def _limit_label(limit: int, limit_unit: str) -> str:
+    return f"{limit} 字节" if limit_unit == "bytes" else f"{limit} 字符"
+
+
+def _truncate_text(text: str, limit: int, limit_unit: str) -> str:
+    if _text_within_limit(text, limit, limit_unit):
+        return text
+    if limit_unit == "bytes":
+        encoded = text.encode("utf-8")
+        if len(encoded) <= limit:
+            return text
+        trimmed = encoded[: max(0, limit - 3)].decode("utf-8", errors="ignore").rstrip()
+        return trimmed + "…"
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
+
+
 def _param(name: str, param_type: ToolParamType, description: str, required: bool = False) -> ToolParameterInfo:
     """构造工具参数定义（ToolParameterInfo 只接受关键字参数）。"""
     return ToolParameterInfo(name=name, param_type=param_type, description=description, required=required)
@@ -854,7 +891,20 @@ class DescriptionSectionConfig(PluginConfigBase):
     size_limit: int | None = Field(
         default=None,
         json_schema_extra={"placeholder": str(DEFAULT_DESCRIPTION_SIZE_LIMIT)},
-        description="人物简介字符上限；超过后后台触发 LLM 精简。",
+        description="卡面印象笔记字符上限；persistent_impression 开启时超出会在发卡时用 LLM 精简显示（不改库）。",
+    )
+    impression_note_size_limit: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_IMPRESSION_NOTE_SIZE_LIMIT)},
+        description="印象笔记存储字节上限（UTF-8）；persistent_impression 开启时超出后强制 LLM 精简并写回数据库。",
+    )
+    persistent_impression: bool | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": "true"},
+        description=(
+            "持久化印象笔记：库中可累积长文（受 impression_note_size_limit 约束）；"
+            "发卡时若超 size_limit 则 LLM 精简卡面显示而不改库。"
+        ),
     )
     compact_model: str | None = Field(
         default=None,
@@ -879,7 +929,7 @@ class DescriptionSectionConfig(PluginConfigBase):
     compact_prompt_template: str = Field(
         default="",
         json_schema_extra={"placeholder": DEFAULT_COMPACT_PROMPT_TEMPLATE},
-        description="精简简介的提示词模板。占位符：{nickname}{personality}{reply_style}{name}{used}{size_limit}{description}。",
+        description="精简简介的提示词模板。占位符：{nickname}{personality}{reply_style}{name}{used}{limit_label}{description}。",
     )
 
 
@@ -1477,6 +1527,7 @@ class AffinityPlugin(MaiBotPlugin):
                 return record
             record = await self._generate_record(ref, stream_id, existing=None)
             await self._store.upsert(record)
+            self._maybe_schedule_storage_compact(ref.person_id, ref.display_name, record.description)
         return record
 
     # ------------------------------------------------------------------ #
@@ -1665,7 +1716,8 @@ class AffinityPlugin(MaiBotPlugin):
         "append_impression",
         description=(
             "给某个人的人物印象简介追加一段文字（会出现在 ta 的好感度卡右侧）。"
-            "target 规则同 adjust_score。超过字符上限会在后台用你的口吻自动精简。"
+            "target 规则同 adjust_score。"
+            "persistent_impression 开启时可累积长文；仅超出存储字节上限时才会写回精简。"
         ),
         parameters=[
             _param("content", ToolParamType.STRING, "要追加的简介文字", True),
@@ -1682,7 +1734,8 @@ class AffinityPlugin(MaiBotPlugin):
         "rewrite_impression",
         description=(
             "用新内容【完全覆盖】某个人的人物印象简介。target 规则同 adjust_score。"
-            "超过字符上限会在后台用你的口吻自动精简。"
+            "persistent_impression 开启时超出存储字节上限会在后台写回精简；"
+            "关闭时超出 size_limit 会在后台写回精简。"
         ),
         parameters=[
             _param("content", ToolParamType.STRING, "新的完整简介", True),
@@ -1697,7 +1750,10 @@ class AffinityPlugin(MaiBotPlugin):
 
     async def _write_description(self, ref: PersonRef, content: str, *, mode: str) -> dict[str, str]:
         assert self._store is not None
-        size_limit = _eint(self.config.description.size_limit, DEFAULT_DESCRIPTION_SIZE_LIMIT, minimum=1)
+        desc_cfg = self.config.description
+        size_limit = _eint(desc_cfg.size_limit, DEFAULT_DESCRIPTION_SIZE_LIMIT, minimum=1)
+        note_limit = _eint(desc_cfg.impression_note_size_limit, DEFAULT_IMPRESSION_NOTE_SIZE_LIMIT, minimum=1)
+        persistent = _ebool(desc_cfg.persistent_impression, DEFAULT_PERSISTENT_IMPRESSION)
         async with self._store.lock:
             record = await self._store.get(ref.person_id) or self._new_record(ref)
             self._sync_identity(record, ref)
@@ -1707,33 +1763,51 @@ class AffinityPlugin(MaiBotPlugin):
             else:
                 record.description = content.strip()
             record.updated_at = _now()
-            used = len(record.description)
+            used_chars = len(record.description)
+            used_bytes = _text_byte_len(record.description)
             await self._store.upsert(record)
-        over = used > size_limit
-        if over:
-            self._schedule(self._safe_compact_description(ref.person_id, ref.display_name, size_limit))
+        self._maybe_schedule_storage_compact(ref.person_id, ref.display_name, record.description)
         action = "已追加到" if mode == "append" else "已覆盖"
-        msg = f"{action} {ref.display_name} 的简介，当前 {used} 字符（上限 {size_limit}）。"
-        if over:
-            msg += " 已超限，后台自动精简中。"
+        if persistent:
+            msg = (
+                f"{action} {ref.display_name} 的简介，当前 {used_chars} 字符（{used_bytes} 字节）。"
+                f" 卡面显示上限 {size_limit} 字符，存储上限 {note_limit} 字节。"
+            )
+            if used_bytes > note_limit:
+                msg += " 已超过存储上限，后台自动精简中。"
+        else:
+            msg = f"{action} {ref.display_name} 的简介，当前 {used_chars} 字符（上限 {size_limit}）。"
+            if used_chars > size_limit:
+                msg += " 已超限，后台自动精简中。"
         return {"content": msg}
 
-    async def _safe_compact_description(self, person_id: str, name: str, size_limit: int) -> None:
+    def _maybe_schedule_storage_compact(self, person_id: str, name: str, text: str) -> None:
+        desc_cfg = self.config.description
+        persistent = _ebool(desc_cfg.persistent_impression, DEFAULT_PERSISTENT_IMPRESSION)
+        size_limit = _eint(desc_cfg.size_limit, DEFAULT_DESCRIPTION_SIZE_LIMIT, minimum=1)
+        note_limit = _eint(desc_cfg.impression_note_size_limit, DEFAULT_IMPRESSION_NOTE_SIZE_LIMIT, minimum=1)
+        if persistent:
+            if _text_byte_len(text) > note_limit:
+                self._schedule(self._safe_compact_description(person_id, name, note_limit, "bytes"))
+        elif len(text) > size_limit:
+            self._schedule(self._safe_compact_description(person_id, name, size_limit, "chars"))
+
+    async def _safe_compact_description(self, person_id: str, name: str, limit: int, limit_unit: str) -> None:
         try:
-            await self._compact_description(person_id, name, size_limit)
+            await self._compact_description(person_id, name, limit, limit_unit)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             self.ctx.logger.warning("简介精简失败 person_id=%s: %s", person_id, exc, exc_info=True)
 
-    async def _compact_description(self, person_id: str, name: str, size_limit: int) -> None:
-        assert self._store is not None
+    async def _compact_description_text(self, name: str, text: str, limit: int, limit_unit: str) -> str:
         desc_cfg = self.config.description
         model = _estr(desc_cfg.compact_model, DEFAULT_COMPACT_MODEL)
         temperature = _efloat(desc_cfg.compact_temperature, DEFAULT_COMPACT_TEMPERATURE)
         max_tokens = _eint(desc_cfg.compact_max_tokens, DEFAULT_COMPACT_MAX_TOKENS, minimum=0)
         if max_tokens <= 0:
-            max_tokens = size_limit * AUTO_COMPACT_MAX_TOKENS_MULTIPLIER
+            basis = limit if limit_unit == "chars" else max(limit // 2, 256)
+            max_tokens = basis * AUTO_COMPACT_MAX_TOKENS_MULTIPLIER
         attempts = _eint(desc_cfg.max_compact_attempts, DEFAULT_MAX_COMPACT_ATTEMPTS, minimum=1)
         template = _etmpl(desc_cfg.compact_prompt_template, DEFAULT_COMPACT_PROMPT_TEMPLATE)
 
@@ -1741,40 +1815,63 @@ class AffinityPlugin(MaiBotPlugin):
         personality = await self.ctx.config.get("personality.personality", "") or ""
         reply_style = await self.ctx.config.get("personality.reply_style", "") or ""
 
+        current = text
+        best = current
+        label = _limit_label(limit, limit_unit)
+        for attempt in range(1, attempts + 1):
+            prompt = _render(
+                template,
+                nickname=nickname,
+                personality=personality,
+                reply_style=reply_style,
+                name=name,
+                used=_text_used(current, limit_unit),
+                limit_label=label,
+                description=current,
+            )
+            result = await self.ctx.llm.generate(
+                prompt=prompt, model=model, temperature=temperature, max_tokens=max_tokens
+            )
+            if not result.get("success"):
+                self.ctx.logger.warning("简介精简第 %d 次 LLM 调用失败: %s", attempt, result.get("error"))
+                break
+            new_desc = (result.get("response") or "").strip()
+            if not new_desc:
+                break
+            if _text_byte_len(new_desc) < _text_byte_len(best):
+                best = new_desc
+            current = new_desc
+            if _text_within_limit(new_desc, limit, limit_unit):
+                return new_desc
+        return _truncate_text(best, limit, limit_unit)
+
+    async def _compact_description(self, person_id: str, name: str, limit: int, limit_unit: str) -> None:
+        assert self._store is not None
         async with self._store.lock:
             record = await self._store.get(person_id)
-            if record is None or len(record.description) <= size_limit:
+            if record is None or _text_within_limit(record.description, limit, limit_unit):
                 return
-            current = record.description
-            best = current
-            for attempt in range(1, attempts + 1):
-                prompt = _render(
-                    template,
-                    nickname=nickname,
-                    personality=personality,
-                    reply_style=reply_style,
-                    name=name,
-                    used=len(current),
-                    size_limit=size_limit,
-                    description=current,
-                )
-                result = await self.ctx.llm.generate(
-                    prompt=prompt, model=model, temperature=temperature, max_tokens=max_tokens
-                )
-                if not result.get("success"):
-                    self.ctx.logger.warning("简介精简第 %d 次 LLM 调用失败: %s", attempt, result.get("error"))
-                    break
-                new_desc = (result.get("response") or "").strip()
-                if not new_desc:
-                    break
-                if len(new_desc) < len(best):
-                    best = new_desc
-                current = new_desc
-                if len(new_desc) <= size_limit:
-                    break
+            best = await self._compact_description_text(name, record.description, limit, limit_unit)
             record.description = best
             record.updated_at = _now()
             await self._store.upsert(record)
+
+    async def _description_for_card(self, ref: PersonRef, record: AffinityRecord) -> str:
+        desc_cfg = self.config.description
+        size_limit = _eint(desc_cfg.size_limit, DEFAULT_DESCRIPTION_SIZE_LIMIT, minimum=1)
+        persistent = _ebool(desc_cfg.persistent_impression, DEFAULT_PERSISTENT_IMPRESSION)
+        text = record.description.strip()
+        if not text:
+            return "（这个人还很神秘，暂无印象。）"
+        if not persistent:
+            return text
+        if len(text) <= size_limit:
+            return text
+        try:
+            return await self._compact_description_text(ref.display_name, text, size_limit, "chars")
+        except Exception as exc:
+            self.ctx.logger.warning("卡面简介精简失败: %s", exc)
+            return _truncate_text(text, size_limit, "chars")
 
     # ------------------------------------------------------------------ #
     # 工具：详情 / 刷新
@@ -1816,6 +1913,47 @@ class AffinityPlugin(MaiBotPlugin):
         stream_id = _resolve_stream_id(kwargs)
         record = await self._refresh_record(ref, stream_id)
         return {"content": f"已刷新对 {ref.display_name} 的印象。\n\n" + self._render_detail_markdown(ref, record)}
+
+    @Tool(
+        "send_impression_card",
+        description=(
+            "向当前聊天流发送某人的印象卡片图片（与 /卡片 命令相同的卡面）。"
+            "适合在对话中你想主动展示、介绍或总结某人对你的印象档案时使用，"
+            "例如对方询问印象、聊到好感相关话题、或你想用卡片回应互动。"
+            "target 传 QQ 号或名字；省略则发给当前发言者。"
+            "若库中尚无该人档案会先冷启动生成；可选 refresh_first 在发送前重算分值与简介。"
+        ),
+        parameters=[
+            _param("target", ToolParamType.STRING, "对象：QQ号 或 名字；省略=当前发言者", False),
+            _param(
+                "refresh_first",
+                ToolParamType.BOOLEAN,
+                "发送前是否先刷新评估（同 refresh_impression）",
+                False,
+            ),
+        ],
+    )
+    async def send_impression_card(
+        self,
+        target: str = "",
+        refresh_first: bool = False,
+        **kwargs: Any,
+    ) -> dict[str, str]:
+        ref, error = await self._resolve_target(target, kwargs)
+        if error or ref is None:
+            return {"content": error or "解析对象失败。"}
+        stream_id = _resolve_stream_id(kwargs)
+        if not stream_id:
+            return {"content": "缺少 stream_id，无法在当前聊天发送卡片。"}
+        try:
+            if refresh_first:
+                await self._refresh_record(ref, stream_id)
+            await self._generate_and_send_card(ref, stream_id)
+        except Exception as exc:
+            self.ctx.logger.error("send_impression_card 失败: %s", exc, exc_info=True)
+            return {"content": "发送印象卡片时出错了……"}
+        action = "已刷新并发送" if refresh_first else "已发送"
+        return {"content": f"{action} {ref.display_name} 的印象卡片。"}
 
     def _render_detail_markdown(self, ref: PersonRef, record: AffinityRecord) -> str:
         lines = [f"## {ref.display_name} 的好感度档案"]
@@ -1936,6 +2074,7 @@ class AffinityPlugin(MaiBotPlugin):
         existing = await self._store.get(ref.person_id)
         record = await self._generate_record(ref, stream_id, existing=existing)
         await self._store.upsert(record)
+        self._maybe_schedule_storage_compact(ref.person_id, ref.display_name, record.description)
         return record
 
     async def _generate_record(
@@ -2163,7 +2302,7 @@ class AffinityPlugin(MaiBotPlugin):
         alias = ref.person_name or ""
         cardname_text = ref.group_cardname
         person_label = ref.person_name or ref.user_nickname or ref.display_name
-        description = record.description.strip() or "（这个人还很神秘，暂无印象。）"
+        description = await self._description_for_card(ref, record)
         card_title_raw = _estr(self.config.card.card_title, DEFAULT_CARD_TITLE)
         card_title = _render_card_text_template(
             card_title_raw, bot_name=bot_name, person_name=person_label
