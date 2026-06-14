@@ -1,0 +1,118 @@
+# 印象卡片 (Impression Card) 插件配置
+#
+# 各节里的字段留空（或整行注释掉）即使用插件代码中的内置默认；仅在需要覆盖时再填写。
+# 插件升级后修改内置默认时，留空字段会自动跟随新默认。
+
+[plugin]
+# 是否启用插件
+enabled = true
+# 配置版本
+config_version = "0.2.0"
+
+[general]
+# 好感度总值的显示名。
+# total_label = "好感度"
+# 一切默认值 / 中间值（未生成、未评分、新增维度都用它）。
+# default_score = 5.0
+# 图表显示刻度上限（仅影响显示比例，实际数值无上下限，可越界）。
+# scale_max = 10.0
+# 图表显示刻度下限（仅作参考标注）。
+# scale_min = 0.0
+# 是否允许通过 @某人 / 名字 查询他人的卡片（false 则只能查自己）。
+# allow_query_others = true
+# 雷达图最多显示几项（按偏离中间值最远，即最极端的项优先；其余维度仍会记录）。
+# radar_top_n = 5
+# 冷启动 / 刷新印象时参考的最近聊天条数。
+# recent_messages_limit = 30
+# 从配置删除某维度时，是否同时从数据库清掉该维度的历史分值（默认保留）。
+# prune_removed_dimensions = false
+# SQLite 数据文件路径；相对路径基于插件目录解析（跨私聊/群聊共用一份）。
+# store_path = "data/affinity.sqlite3"
+
+# 好感度子项维度（可任意多项；卡面只显示最极端的 radar_top_n 项）。
+# 默认不写任何 [[dimensions]]，使用插件内置的 16 项默认维度（混合养成 / 抽象 meme / RPG 属性），
+# 这样插件升级新增维度时你也能自动用上。需要自定义时，取消下面注释照葫芦画瓢增删即可。
+# 改 label / 顺序而保持 key 不变不会丢数据；改 key 视为新维度（旧值默认保留在库中）。
+#
+# 内置默认 16 项（key — label）：
+#   familiarity熟悉度 trust信赖度 joy欢乐值 trouble麻烦度 clinginess贴贴度
+#   abstract抽象度 quality含金量 wavelength电波 threat威胁度 generosity慷慨度
+#   intelligence智力 charm魅力 vitality活跃 luck幸运 chaos混沌 chuuni中二度
+#
+# [[dimensions]]
+# key = "familiarity"
+# label = "熟悉度"
+# description = "认识多久、了解多深"
+#
+# [[dimensions]]
+# key = "abstract"
+# label = "抽象度"
+# description = "发言抽象、逆天、不可名状的程度"
+
+[card]
+# 卡片顶部居中的标题。
+# card_title = "印象档案"
+# 卡片 HTML 模板路径，相对插件目录解析。
+# 内置：assets/parchment.html（羊皮纸）、assets/holo.html（全息科技）、assets/cute.html（可爱贴纸）。
+# 指向你自己的 html 即可完全自定义（占位符见各内置模板顶部注释）。
+# card_template = "assets/parchment.html"
+
+[image]
+# 卡片本身没有任何合成动画。只有当用户头像本身是动图（gif/webp/apng 多帧）时，
+# 才把头像各帧合进卡片输出动图；否则输出静态单张。
+#
+# 静态卡片输出格式：webp / png / jpg。
+# static_format = "webp"
+# 动图卡片输出格式：animated_webp / apng / gif。
+# animated_format = "animated_webp"
+# 头像是动图时是否把卡片也做成动图（false 则永远输出静态、只取头像首帧）。
+# animate_with_avatar = true
+# 动图头像最多取多少帧（超过则均匀抽样，控制体积与耗时）。
+# max_avatar_frames = 30
+# 头像帧本身未带时长时的兜底每帧时长（毫秒）。
+# avatar_frame_fallback_ms = 80
+# 动图循环次数，0 为无限循环。
+# loop = 0
+# jpg 输出质量（1-100）。
+# jpg_quality = 90
+# webp 输出质量（1-100）。
+# webp_quality = 90
+# jpg / gif 这类无透明通道格式的填充底色（#RRGGBB）。
+# background_color = "#12131a"
+# 是否走「表情」通道发送（部分适配器表情通道动图更稳）；默认走图片通道。
+# send_as_emoji = false
+
+[description]
+# 人物简介字符上限；超过后后台触发 LLM 精简。
+# size_limit = 200
+# 精简简介使用的 LLM 模型任务名。
+# compact_model = "planner"
+# 精简简介的采样温度。
+# compact_temperature = 0.4
+# 精简简介的最大 token；0 表示自动按上限估算。
+# compact_max_tokens = 0
+# 精简仍超限时的最大重试次数。
+# max_compact_attempts = 3
+# 精简简介的提示词模板。
+# 占位符：{nickname}{personality}{reply_style}{name}{used}{size_limit}{description}
+# compact_prompt_template = ""
+
+[cold_start]
+# 冷启动 / 刷新印象使用的 LLM 模型任务名。
+# model = "planner"
+# 冷启动 / 刷新的采样温度（高一点更有个性）。
+# temperature = 0.75
+# 冷启动 / 刷新的最大 token；0 为自动。
+# max_tokens = 0
+# 冷启动 / 刷新提示词模板。占位符：
+# {nickname}{personality}{reply_style}{name}{total_label}{dimensions_doc}{scores_keys_doc}
+# {user_nickname}{group_cardname}{memory_points}{recent_chat}{existing_block}{size_limit}
+# prompt_template = ""
+
+[notify]
+# 加减分时是否发送【系统通知】消息。
+# enabled = true
+# 播报哪些维度变化：["total"] 只播报好感度；["*"] 播报所有；[] 不播报。维度用 key 或 total。
+# notify_dimensions = ["total"]
+# 系统通知文案模板。占位符：{name}{dimension}{delta}{new_value}{reason}{nickname}
+# notify_template = ""

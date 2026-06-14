@@ -1,0 +1,124 @@
+<!--
+  好感度卡模板：可爱贴纸（cute） · T 字型布局
+  占位符与 SVG 着色类同 parchment.html，请勿删除被引用的 class。
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: transparent; font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+
+  #card {
+    width: 920px;
+    display: flex; flex-direction: column;
+    border-radius: 28px; overflow: hidden; color: #6b4a5a;
+    background:
+      radial-gradient(circle at 18% 12%, rgba(255,255,255,0.7), rgba(0,0,0,0) 44%),
+      linear-gradient(150deg, #ffe9f3 0%, #ffe0ee 50%, #fff0d9 100%);
+    border: 5px solid #ffb3d1;
+    box-shadow: inset 0 0 50px rgba(255,170,210,0.35);
+  }
+
+  .titlebar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding: 18px 26px 12px; }
+  .tb-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+  .tb-center {
+    text-align: center; font-size: 25px; font-weight: 800; letter-spacing: 1px;
+    color: #ff6fa5; text-shadow: 0 1px 0 rgba(255,255,255,0.7); white-space: nowrap;
+  }
+  .tb-right { text-align: right; }
+
+  .avatar {
+    width: 72px; height: 72px; border-radius: 50%; object-fit: cover;
+    border: 4px solid #ffb3d1; box-shadow: 0 3px 10px rgba(255,150,195,0.5); flex-shrink: 0;
+  }
+  .avatar-placeholder {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 32px; font-weight: 800; color: #fff;
+    background: linear-gradient(135deg, #ffa6c9, #ff8fb8);
+  }
+  .names { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .nickname { font-size: 23px; font-weight: 800; color: #e8568b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .alias { font-size: 15px; color: #ff8fb8; }
+  .cardname { font-size: 12px; color: #c89aae; }
+
+  .score-label { font-size: 13px; color: #d96a98; letter-spacing: 1px; }
+  .score-value { font-size: 40px; font-weight: 800; color: #e8568b; line-height: 1.05; }
+  .score-unit { font-size: 15px; font-weight: 600; color: #ff8fb8; margin-left: 4px; }
+
+  .gauge { padding: 2px 30px 14px; }
+  .gauge svg { width: 100%; height: auto; display: block; }
+
+  .body { display: flex; border-top: 3px dotted rgba(255,150,195,0.7); }
+  .left {
+    width: 45%; padding: 18px 16px 22px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border-right: 3px dotted rgba(255,150,195,0.7);
+  }
+  .left .radar { width: 100%; max-width: 340px; }
+  .right { flex: 1; padding: 20px 26px 24px; display: flex; flex-direction: column; }
+
+  .desc-title { font-size: 16px; font-weight: 700; color: #ff6fa5; margin-bottom: 8px; }
+  .desc {
+    flex: 1; min-height: 240px; font-size: 18px; line-height: 1.85; color: #6b4a5a; white-space: pre-wrap;
+    background: rgba(255,255,255,0.6); border: 2px solid rgba(255,170,210,0.6);
+    border-radius: 16px; padding: 16px 18px;
+  }
+
+  .dim-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 10px; margin-top: 12px; }
+  .legend-item {
+    display: flex; gap: 6px; align-items: baseline; font-size: 13px;
+    background: rgba(255,255,255,0.7); border: 2px solid rgba(255,170,210,0.6);
+    border-radius: 12px; padding: 2px 8px;
+  }
+  .legend-name { color: #d96a98; }
+  .legend-val { font-weight: 800; color: #e8568b; }
+
+  /* —— SVG：雷达 —— */
+  .grid { fill: none; stroke: rgba(255,150,195,0.4); stroke-width: 1; }
+  .axis { stroke: rgba(255,150,195,0.35); stroke-width: 1; }
+  .radar-fill { fill: rgba(255,150,195,0.35); }
+  .radar-stroke { stroke: #ff7fb0; stroke-width: 2.5; }
+  .radar-vertex { fill: #e8568b; }
+  .axis-label { fill: #e8568b; font-size: 15px; font-weight: 700; }
+  .axis-value { fill: #ff8fb8; font-size: 13px; font-weight: 700; }
+
+  /* —— SVG：量表条 —— */
+  .gauge-bar-track { fill: rgba(255,150,195,0.2); }
+  .gauge-bar-zone { fill: rgba(255,255,255,0.65); }
+  .gauge-bar-fill { fill: #ff7fb0; }
+  .gauge-bar-over { fill: #ffcf5a; }
+  .gauge-bar-neg { fill: #9a86ff; }
+  .gauge-bar-tick { stroke: rgba(255,150,195,0.7); stroke-width: 1.5; }
+  .gauge-bar-tick-label { fill: #d96a98; font-size: 15px; font-weight: 700; }
+  .gauge-bar-knob { fill: #e8568b; stroke: #fff; stroke-width: 2; }
+  .gauge-bar-arrow { fill: #ffcf5a; }
+</style>
+
+<div id="card">
+  <div class="titlebar">
+    <div class="tb-left">
+      {avatar_html}
+      <div class="names">
+        <div class="nickname">{nickname}</div>
+        {alias_block}
+        {cardname_block}
+      </div>
+    </div>
+    <div class="tb-center">♡ {card_title} ♡</div>
+    <div class="tb-right">
+      <div class="score-label">{total_label}</div>
+      <div class="score-value">{total_value}</div>
+    </div>
+  </div>
+
+  <div class="gauge">{gauge_bar}</div>
+
+  <div class="body">
+    <div class="left">
+      <div class="radar">{radar_svg}</div>
+      {legend_html}
+    </div>
+    <div class="right">
+      <div class="desc-title">💕 印象笔记</div>
+      <div class="desc">{description}</div>
+    </div>
+  </div>
+</div>

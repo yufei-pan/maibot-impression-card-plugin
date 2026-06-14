@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 运行期生成的好感度数据（不应进入版本库）
+data/*.sqlite3
+data/*.sqlite3-journal
+data/*.db
+
+# 本地测试产物
+tests/_out/
+
+# 编辑器/系统
+.DS_Store
+.idea/
+.vscode/

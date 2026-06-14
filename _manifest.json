@@ -1,0 +1,53 @@
+{
+  "manifest_version": 2,
+  "id": "com.0-hz.impression-card",
+  "version": "0.2.0",
+  "name": "印象卡片 (Impression Card)",
+  "description": "为麦麦引入一套欢乐向的好感度 / 印象系统：群友可用 /卡片 查询自己（或他人）的印象卡（顶部 title bar 含头像/昵称/别名与好感度数字，下方横向 0-10 好感量表条可双向越界，主区域左侧多维属性雷达、右侧人物印象笔记）。麦麦可通过工具给某人某项加减分并以【系统通知】RPG 风格播报；维度任意多项（默认 16 项），卡面只显示最极端 5 项；数值无上下限（顶出/凹陷更好玩）。图片支持 webp/动图/apng/png/gif/jpg 多格式，动图首帧即完整信息。数据本地存储、跨私聊/群聊共用。新用户结合 PersonInfo 印象与最近聊天由 LLM 冷启动生成。",
+  "author": {
+    "name": "kes",
+    "url": "https://github.com/yufei-pan"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/yufei-pan/maibot-impression-card-plugin",
+    "homepage": "https://github.com/yufei-pan/maibot-impression-card-plugin",
+    "documentation": "https://github.com/yufei-pan/maibot-impression-card-plugin/blob/main/README.md",
+    "issues": "https://github.com/yufei-pan/maibot-impression-card-plugin/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.99.99"
+  },
+  "sdk": {
+    "min_version": "2.5.1",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [
+    {
+      "type": "python_package",
+      "name": "httpx",
+      "version_spec": ">=0.26.0"
+    },
+    {
+      "type": "python_package",
+      "name": "pillow",
+      "version_spec": ">=10.0.0"
+    }
+  ],
+  "capabilities": [
+    "config.get",
+    "llm.generate",
+    "database.get",
+    "person.get_id",
+    "person.get_id_by_name",
+    "message.build_readable",
+    "render.html2png",
+    "send.text",
+    "send.image",
+    "send.emoji"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN"
+  }
+}

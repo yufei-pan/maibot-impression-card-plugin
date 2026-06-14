@@ -1,0 +1,323 @@
+"""离线冒烟测试：不依赖 MaiBot Host，验证配置、SVG 与图片编码逻辑。
+
+运行方式（在插件目录）：
+    PYTHONPATH=../maibot-plugin-sdk python tests/smoke_test.py
+"""
+
+from __future__ import annotations
+
+import sys
+import tomllib
+from io import BytesIO
+from pathlib import Path
+
+PLUGIN_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PLUGIN_DIR))
+
+import plugin as affinity  # noqa: E402
+
+
+def _flatten_values(value: object) -> list[object]:
+    if isinstance(value, dict):
+        items: list[object] = []
+        for nested in value.values():
+            items.extend(_flatten_values(nested))
+        return items
+    if isinstance(value, list):
+        items = []
+        for nested in value:
+            items.extend(_flatten_values(nested))
+        return items
+    return [value]
+
+
+def test_plugin_importable() -> None:
+    inst = affinity.create_plugin()
+    assert inst is not None
+    default_config = type(inst).build_default_config()
+    assert default_config["plugin"]["config_version"] == affinity.CURRENT_CONFIG_VERSION
+    # 标量字段默认应为 None（占位空值，便于升级跟随新默认）
+    assert default_config["general"]["total_label"] is None
+    assert default_config["image"]["static_format"] is None
+    assert default_config["image"]["animated_format"] is None
+    print("ok: plugin importable, defaults are placeholders")
+
+
+def test_manifest_capabilities_cover_usage() -> None:
+    """从源码里推导出实际用到的 ctx 能力，确保 _manifest.json 已声明（避免 db.get vs database.get 这类错配）。"""
+    import json
+    import re
+
+    source = (PLUGIN_DIR / "plugin.py").read_text(encoding="utf-8")
+    # 代理名 → Host 能力前缀（db 实际是 database）
+    proxy_to_capability = {
+        "db": "database", "llm": "llm", "render": "render", "person": "person",
+        "message": "message", "config": "config", "send": "send", "emoji": "emoji",
+        "chat": "chat", "knowledge": "knowledge",
+    }
+    used = set()
+    for proxy, method in re.findall(r"self\.ctx\.([a-z_]+)\.([a-z_0-9]+)", source):
+        if proxy in proxy_to_capability:
+            used.add(f"{proxy_to_capability[proxy]}.{method}")
+
+    manifest = json.loads((PLUGIN_DIR / "_manifest.json").read_text(encoding="utf-8"))
+    declared = set(manifest.get("capabilities", []))
+    missing = used - declared
+    assert not missing, f"_manifest.json 缺少能力声明：{sorted(missing)}"
+    # 不应再出现错误的 db.* 命名
+    assert not any(c.startswith("db.") for c in declared), declared
+    print(f"ok: manifest declares all {len(used)} used capabilities")
+
+
+def test_config_toml_consistent() -> None:
+    default_config = affinity.AffinityPlugin.build_default_config()
+    config_data = tomllib.loads((PLUGIN_DIR / "config.toml").read_text(encoding="utf-8"))
+    for section, value in config_data.items():
+        assert section in default_config, f"config.toml 中存在未知配置节：{section}"
+        if isinstance(value, dict):
+            for field_name in value:
+                assert field_name in default_config[section], f"未知字段：{section}.{field_name}"
+    print("ok: config.toml consistent with model")
+
+
+def test_resolve_dimensions_default() -> None:
+    dims = affinity.resolve_dimensions(None)
+    keys = [d.key for d in dims]
+    assert len(keys) == 16, keys
+    assert keys[:5] == ["familiarity", "trust", "joy", "trouble", "clinginess"]
+    assert {"abstract", "quality", "intelligence", "chaos", "chuuni"} <= set(keys)
+    # 空列表也回退默认
+    assert affinity.resolve_dimensions([]) == dims
+    # 自定义 + 去重
+    custom = affinity.resolve_dimensions(
+        [{"key": "a", "label": "甲"}, {"key": "a", "label": "重复"}, {"key": "b", "label": "乙"}]
+    )
+    assert [d.key for d in custom] == ["a", "b"]
+    print("ok: resolve_dimensions default (16) & dedup")
+
+
+def test_effective_helpers() -> None:
+    assert affinity._eint(None, 5) == 5
+    assert affinity._eint(3, 5) == 3
+    assert affinity._efloat(None, 5.0) == 5.0
+    assert affinity._estr(None, "x") == "x"
+    assert affinity._estr("  ", "x") == "x"
+    assert affinity._estr(" y ", "x") == "y"
+    assert affinity._ebool(None, True) is True
+    assert affinity._ebool(False, True) is False
+    print("ok: effective config helpers")
+
+
+def test_svg_generation() -> None:
+    dims = [("熟悉度", 8.0), ("信赖度", 3.0), ("欢乐值", 12.0), ("麻烦度", -4.0), ("贴贴度", 6.0)]
+    radar = affinity.build_radar_svg(dims, scale_max=10.0)
+    assert radar.startswith("<svg") and radar.endswith("</svg>")
+    assert "radar-fill" in radar and "axis-label" in radar
+    # 越界 / 负值不应导致空输出
+    assert affinity.build_radar_svg([("x", 99.0)], scale_max=10.0).startswith("<svg")
+    assert affinity.build_radar_svg([], scale_max=10.0) == ""
+
+    # 量表条：标准范围、向右越界、向左（负值）越界
+    gauge_norm = affinity.build_gauge_bar_svg(7.0, 10.0, 0.0)
+    assert gauge_norm.startswith("<svg") and "gauge-bar-fill" in gauge_norm
+    assert "gauge-bar-tick-label" in gauge_norm
+    gauge_over = affinity.build_gauge_bar_svg(13.0, 10.0, 0.0)
+    assert "gauge-bar-over" in gauge_over
+    gauge_neg = affinity.build_gauge_bar_svg(-2.0, 10.0, 0.0)
+    assert "gauge-bar-neg" in gauge_neg
+    # 极端越界应出现夹边箭头
+    assert "gauge-bar-arrow" in affinity.build_gauge_bar_svg(99.0, 10.0, 0.0)
+    assert "gauge-bar-arrow" in affinity.build_gauge_bar_svg(-99.0, 10.0, 0.0)
+    print("ok: svg generation (radar + gauge bar overflow & negative)")
+
+
+def test_templates_render_clean() -> None:
+    placeholders = [
+        "card_title", "avatar_html", "nickname", "alias_block", "cardname_block",
+        "total_label", "total_value", "gauge_bar", "radar_svg", "legend_html", "description",
+    ]
+    values = {p: f"<{p}>" for p in placeholders}
+    for name in ("parchment.html", "holo.html", "cute.html"):
+        template = (PLUGIN_DIR / "assets" / name).read_text(encoding="utf-8")
+        rendered = affinity._render(template, **values)
+        # 渲染后不应残留任何已知占位符
+        for p in placeholders:
+            assert "{" + p + "}" not in rendered, f"{name} 残留占位符 {p}"
+        assert 'id="card"' in rendered
+    print("ok: all card templates render without leftover placeholders")
+
+
+def _card_png(magenta_box=None) -> bytes:
+    """造一张测试卡片 PNG；magenta_box 给定时在该处画洋红占位（模拟头像色键洞）。"""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGBA", (200, 120), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([4, 4, 196, 116], radius=12, fill=(40, 80, 160, 255))
+    if magenta_box is not None:
+        draw.ellipse(magenta_box, fill=(255, 0, 255, 255))
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _animated_avatar_gif(frames=4) -> bytes:
+    """造一个多帧 GIF 头像。"""
+    from PIL import Image
+
+    imgs = []
+    for i in range(frames):
+        shade = 30 + i * 50
+        imgs.append(Image.new("RGB", (64, 64), (shade, 20, 200 - i * 30)))
+    buf = BytesIO()
+    imgs[0].save(buf, format="GIF", save_all=True, append_images=imgs[1:], duration=70, loop=0)
+    return buf.getvalue()
+
+
+def _static_avatar_png() -> bytes:
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (64, 64), (200, 60, 60)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_avatar_frame_extraction() -> None:
+    # 静态头像 → 单帧、非动图
+    frames, durs, animated = affinity.extract_avatar_frames(
+        _static_avatar_png(), max_frames=30, fallback_duration_ms=80
+    )
+    assert len(frames) == 1 and animated is False
+    # 动图头像 → 多帧、is_animated
+    frames, durs, animated = affinity.extract_avatar_frames(
+        _animated_avatar_gif(4), max_frames=30, fallback_duration_ms=80
+    )
+    assert animated is True and len(frames) == 4 and len(durs) == 4
+    # 抽样：帧数超过上限
+    frames, durs, animated = affinity.extract_avatar_frames(
+        _animated_avatar_gif(10), max_frames=4, fallback_duration_ms=80
+    )
+    assert animated is True and len(frames) == 4
+    # 坏数据不炸
+    assert affinity.extract_avatar_frames(b"not-an-image", max_frames=30, fallback_duration_ms=80) == ([], [], False)
+    print("ok: avatar frame extraction (static / animated / sampled / garbage)")
+
+
+def test_chroma_composite() -> None:
+    from PIL import Image
+
+    base = Image.open(BytesIO(_card_png(magenta_box=[20, 20, 100, 100]))).convert("RGBA")
+    mask, box = affinity._chroma_mask(base)
+    assert box is not None
+    avatar = Image.new("RGBA", (64, 64), (0, 200, 0, 255))  # 纯绿头像
+    out = affinity.composite_avatar_over_card(base, avatar)
+    cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+    r, g, b, _ = out.getpixel((cx, cy))
+    # 洞中心应被绿色头像替换，不再是洋红
+    assert g > 150 and r < 100 and b < 100, (r, g, b)
+    print("ok: chroma-key composites avatar into placeholder hole")
+
+
+def test_static_encoding() -> None:
+    png = _card_png()
+    cases = {"webp": b"RIFF", "png": b"\x89PNG\r\n\x1a\n", "jpg": b"\xff\xd8\xff"}
+    for fmt, magic in cases.items():
+        data, mime = affinity.encode_static_card(
+            png, static_format=fmt, jpg_quality=85, webp_quality=85, background_color="#12131a"
+        )
+        assert data[: len(magic)] == magic, f"{fmt} 魔数不符: {data[:8]!r}"
+        assert mime
+    webp, _ = affinity.encode_static_card(
+        png, static_format="webp", jpg_quality=85, webp_quality=85, background_color="#12131a"
+    )
+    assert webp[8:12] == b"WEBP"
+    print("ok: static encoding webp/png/jpg")
+
+
+def test_animated_encoding() -> None:
+    base = _card_png(magenta_box=[20, 20, 100, 100])
+    frames, durs, _ = affinity.extract_avatar_frames(_animated_avatar_gif(4), max_frames=30, fallback_duration_ms=80)
+    cases = {"animated_webp": b"RIFF", "apng": b"\x89PNG\r\n\x1a\n", "gif": b"GIF8"}
+    for fmt, magic in cases.items():
+        data, mime = affinity.encode_animated_card(
+            base, frames, durs, animated_format=fmt, loop=0, webp_quality=85, background_color="#12131a"
+        )
+        assert data[: len(magic)] == magic, f"{fmt} 魔数不符: {data[:8]!r}"
+        assert mime
+    print("ok: animated encoding animated_webp/apng/gif (avatar frames composited)")
+
+
+def test_helpers() -> None:
+    assert affinity._fmt_num(5.0) == "5"
+    assert affinity._fmt_num(5.5) == "5.5"
+    assert affinity._fmt_delta(3) == "+3"
+    assert affinity._fmt_delta(-2.5) == "-2.5"
+    assert affinity._extract_json_object('前言 {"a": 1} 后语') == {"a": 1}
+    assert affinity._extract_json_object("```json\n{\"x\": 2}\n```") == {"x": 2}
+    assert affinity._extract_json_object("no json here") is None
+    assert affinity._parse_memory_points('["甲", "乙"]') == ["甲", "乙"]
+    assert affinity._first_group_cardname('[{"group_id": "1", "group_cardname": "小麦"}]') == "小麦"
+    assert affinity._sniff_image_mime(b"\xff\xd8\xff\xe0") == "image/jpeg"
+    print("ok: misc helpers")
+
+
+def test_identity_resolution() -> None:
+    # 顶层 kwargs（命令 / 工具执行器实际传入的形态）
+    platform, uid, gid = affinity._caller_identity(
+        {"platform": "qq", "user_id": "123", "group_id": "456"}
+    )
+    assert (platform, uid, gid) == ("qq", "123", "456")
+    # 兜底从 message 字典的 message_info 取
+    platform, uid, gid = affinity._caller_identity(
+        {"message": {"platform": "qq", "message_info": {"user_info": {"user_id": "789"}, "group_info": {"group_id": "111"}}}}
+    )
+    assert (uid, gid) == ("789", "111")
+    # @ 段：raw_message 里 type=at → data.target_user_id
+    at_uid = affinity._extract_target_user_id(
+        {"message": {"raw_message": [{"type": "text", "data": {}}, {"type": "at", "data": {"target_user_id": "999"}}]}}
+    )
+    assert at_uid == "999"
+    # 无 @ 时回退到引用回复的发送者
+    reply_uid = affinity._extract_target_user_id(
+        {"message": {"raw_message": [{"type": "reply", "data": {"target_message_sender_id": "888"}}]}}
+    )
+    assert reply_uid == "888"
+    print("ok: identity resolution from top-level kwargs / message dict / at / reply")
+
+
+def test_top_dimensions_selection() -> None:
+    inst = affinity.create_plugin()
+    inst._dimensions = affinity.resolve_dimensions(None)
+    inst._default_score = 5.0
+    inst._radar_top_n = 3
+    record = affinity.AffinityRecord(
+        person_id="p1",
+        scores={"familiarity": 5.0, "trust": 9.0, "joy": 1.0, "trouble": 5.5, "clinginess": 8.0},
+    )
+    top = inst._top_dimensions(record)
+    labels = {label for label, _ in top}
+    # 最极端三项：trust(|9-5|=4)、joy(|1-5|=4)、clinginess(|8-5|=3)
+    assert labels == {"信赖度", "欢乐值", "贴贴度"}, labels
+    print("ok: top dimension selection picks most extreme")
+
+
+def main() -> None:
+    test_plugin_importable()
+    test_manifest_capabilities_cover_usage()
+    test_config_toml_consistent()
+    test_resolve_dimensions_default()
+    test_effective_helpers()
+    test_svg_generation()
+    test_templates_render_clean()
+    test_avatar_frame_extraction()
+    test_chroma_composite()
+    test_static_encoding()
+    test_animated_encoding()
+    test_helpers()
+    test_identity_resolution()
+    test_top_dimensions_selection()
+    print("\n全部冒烟测试通过")
+
+
+if __name__ == "__main__":
+    main()
