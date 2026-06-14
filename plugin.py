@@ -3,7 +3,7 @@
 为麦麦引入一套欢乐向的好感度系统：
 
 - ``/好感度 [@某人|名字]`` 生成并发送一张「冒险者公会卡」图片：
-  左侧多维属性雷达图（任意多维，只显示最极端的 5 项）+ 好感度环形仪表，
+  左侧多维属性雷达图（任意多维，默认显示得分最高的 N 项，有负分时另含最低 1 项）+ 好感度环形仪表，
   右侧头像、QQ 昵称、麦麦给的别名与人物印象简介；
 - 麦麦可调用工具给某人某一项加减分 / 设定分值，并以【系统通知】RPG 风格播报；
 - 麦麦可调用工具主动发送某人的印象卡片图片（与 /卡片 相同卡面）；
@@ -53,13 +53,8 @@ _FONT_FACE_CSS_CACHE: str | None = None
 # 默认值（config.toml 留空 / 不写即跟随这里；插件升级改默认时空字段自动跟随新值）
 # --------------------------------------------------------------------------- #
 
-# 中间值 / 一切默认分值都是 5。
+# 中间值 / 一切默认分值由 default_score 配置（出厂默认 5）。
 DEFAULT_SCORE = 5.0
-_SCORE_GUIDANCE_FOR_TOOLS = (
-    "各维度与总值的默认中间值是 5；"
-    "虽无硬性上下限，但一般会在 0–10 之间浮动，少数情况可故意越界以达成夸张效果。"
-    "所有子项均为「越高越好」的正向表述：加分表示认可，扣分表示不满。"
-)
 
 # 旧版 key / 标签 → 现行 key（开发期兼容，可选）。
 LEGACY_DIMENSION_ALIASES: dict[str, str] = {
@@ -166,10 +161,10 @@ DEFAULT_COLD_START_PROMPT_TEMPLATE = """你是{nickname}。
 
 你要为群友「{name}」{task_intro}一份「好感度档案」。这是一个欢乐向的设定，请完全以你的视角、按你的喜好与脾气来打分，可以主观、可以毒舌、可以偏心，不必客观中立。
 
-评分维度（每项参考 0-10，5 为中间值；分数越高表示你越认可该项；加分=奖励、扣分=不满。各维度均为正向表述，允许极端越界）：
+评分维度（每项参考 {scale_min}–{scale_max}，{default_score} 为中间值；分数越高表示你越认可该项；加分=奖励、扣分=不满。各维度均为正向表述，允许极端越界）：
 {dimensions_doc}
 
-同时给一个「{total_label}」总分（同样以 0-10 为参考，可越界）。
+同时给一个「{total_label}」总分（同样以 {scale_min}–{scale_max} 为参考，可越界）。
 
 关于这个人你已知的信息：
 {person_identities}
@@ -407,6 +402,27 @@ def _fmt_num(value: float) -> str:
     return f"{value:.1f}"
 
 
+def _fmt_scale_range(scale_min: float, scale_max: float) -> str:
+    return f"{_fmt_num(scale_min)}–{_fmt_num(scale_max)}"
+
+
+def _score_guidance_text(
+    *,
+    default_score: float = DEFAULT_SCORE,
+    scale_min: float = DEFAULT_SCALE_MIN,
+    scale_max: float = DEFAULT_SCALE_MAX,
+) -> str:
+    return (
+        f"各维度与总值的默认中间值是 {_fmt_num(default_score)}；"
+        f"虽无硬性上下限，但一般会在 {_fmt_scale_range(scale_min, scale_max)} 之间浮动，"
+        f"少数情况可故意越界以达成夸张效果。"
+        "所有子项均为「越高越好」的正向表述：加分表示认可，扣分表示不满。"
+    )
+
+
+_SCORE_GUIDANCE_FOR_TOOLS = _score_guidance_text()
+
+
 def _fmt_delta(value: float) -> str:
     """带符号格式化增量。"""
     sign = "+" if value >= 0 else ""
@@ -467,23 +483,80 @@ def _coerce_float(value: Any, default: float) -> float:
         return default
 
 
+_RADAR_TOP_N_PATTERN = re.compile(
+    r"(?:^|\s)(?:雷达|radar|top_n|雷达数|雷达维度)[:：]\s*(?P<spec>\d+)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_radar_top_n_arg(text: str) -> tuple[str, str]:
+    """从命令 target 参数里拆出对象指称与雷达 top_n（如「雷达:5」）。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return "", ""
+    match = _RADAR_TOP_N_PATTERN.search(raw)
+    if not match:
+        return raw, ""
+    spec = str(match.group("spec") or "").strip()
+    clean = (raw[: match.start()] + raw[match.end() :]).strip()
+    return clean, spec
+
+
 # --------------------------------------------------------------------------- #
 # SVG 生成（几何在 Python，配色由各 HTML 模板的 CSS 类控制）
 # --------------------------------------------------------------------------- #
-def _radar_sector_class(v0: float, v1: float, scale_max: float) -> str:
+def select_radar_dimensions(
+    scored_pairs: list[tuple[str, float]],
+    *,
+    top_n: int,
+) -> list[tuple[str, float]]:
+    """挑选雷达图维度：默认取得分最高的 N 项；若有负分则改为最高 N-1 项 + 最低 1 项。"""
+    n = max(1, int(top_n or 1))
+    if not scored_pairs:
+        return []
+
+    min_entry = min(scored_pairs, key=lambda item: (item[1], item[0]))
+    has_negative = min_entry[1] < 0
+    high_count = max(0, n - 1) if has_negative else n
+
+    chosen: list[tuple[str, float]] = []
+    chosen_labels: set[str] = set()
+    min_label = min_entry[0]
+    for label, score in sorted(scored_pairs, key=lambda item: item[1], reverse=True):
+        if has_negative and label == min_label:
+            continue
+        if len(chosen) >= high_count:
+            break
+        chosen.append((label, score))
+        chosen_labels.add(label)
+
+    if has_negative and min_label not in chosen_labels:
+        chosen.append(min_entry)
+
+    chosen_labels = {label for label, _ in chosen}
+    return [(label, score) for label, score in scored_pairs if label in chosen_labels]
+
+
+def _radar_sector_class(v0: float, v1: float, *, scale_min: float, scale_max: float) -> str:
     """按相邻两维分值决定扇区着色类。"""
-    if v0 < 0 or v1 < 0:
+    if v0 < scale_min or v1 < scale_min:
         return "radar-sector-neg"
     if v0 > scale_max or v1 > scale_max:
         return "radar-sector-over"
     return "radar-sector-pos"
 
 
-def build_radar_svg(dims: list[tuple[str, float]], scale_max: float, size: int = 360) -> str:
+def build_radar_svg(
+    dims: list[tuple[str, float]],
+    scale_max: float,
+    size: int = 360,
+    *,
+    scale_min: float = DEFAULT_SCALE_MIN,
+) -> str:
     """生成属性雷达图 SVG。
 
-    数值线性映射半径，0 在圆心、scale_max 在外环；超过 scale_max 顶出外环，
-    负数则穿过圆心落到对侧（凹陷），刻意制造越界的趣味。
+    数值线性映射半径：scale_min 在圆心、scale_max 在外环；低于 scale_min 穿过圆心凹陷，
+    超过 scale_max 顶出外环。
 
     相邻维度围成的扇区分别上色（负值标红、超高标亮、其余为主题色），
     再叠加上层轮廓线与顶点。
@@ -492,7 +565,8 @@ def build_radar_svg(dims: list[tuple[str, float]], scale_max: float, size: int =
     radar-stroke、radar-vertex、axis-label、axis-value。
     """
     n = len(dims)
-    if n == 0 or scale_max <= 0:
+    span = scale_max - scale_min
+    if n == 0 or span <= 0:
         return ""
 
     # 几何：外环尽量大、viewBox 贴紧标签边界，避免缩放后四周留白。
@@ -511,7 +585,7 @@ def build_radar_svg(dims: list[tuple[str, float]], scale_max: float, size: int =
         return -math.pi / 2.0 + 2.0 * math.pi * i / n
 
     def point(value: float, i: int) -> tuple[float, float]:
-        r = outer * (value / scale_max)
+        r = outer * ((value - scale_min) / span)
         a = angle(i)
         return cx + r * math.cos(a), cy + r * math.sin(a)
 
@@ -526,14 +600,15 @@ def build_radar_svg(dims: list[tuple[str, float]], scale_max: float, size: int =
         v1 = dims[(i + 1) % n][1]
         x0, y0 = point(v0, i)
         x1, y1 = point(v1, (i + 1) % n)
-        sector_cls = _radar_sector_class(v0, v1, scale_max)
+        sector_cls = _radar_sector_class(v0, v1, scale_min=scale_min, scale_max=scale_max)
         parts.append(
             f'<polygon class="{sector_cls}" '
             f'points="{cx:.1f},{cy:.1f} {x0:.1f},{y0:.1f} {x1:.1f},{y1:.1f}" />'
         )
 
-    # 网格环：外环（scale_max）与半环（scale_max/2）
-    for ring_value in (scale_max, scale_max / 2.0):
+    # 网格环：外环（scale_max）与中间环（量程中点）
+    mid_value = scale_min + span / 2.0
+    for ring_value in (scale_max, mid_value):
         ring_pts = []
         for i in range(n):
             x, y = point(ring_value, i)
@@ -926,7 +1001,7 @@ class GeneralSectionConfig(PluginConfigBase):
     radar_top_n: int | None = Field(
         default=None,
         json_schema_extra={"placeholder": str(DEFAULT_RADAR_TOP_N)},
-        description="雷达图最多显示几项（按偏离中间值最远，即最极端的项优先）。",
+        description="雷达图最多显示几项：默认取得分最高的 N 项；若有负分则显示最高 N-1 项与最低 1 项。",
     )
     recent_messages_limit: int | None = Field(
         default=None,
@@ -1092,7 +1167,7 @@ class ColdStartSectionConfig(PluginConfigBase):
     prompt_template: str = Field(
         default="",
         json_schema_extra={"placeholder": DEFAULT_COLD_START_PROMPT_TEMPLATE},
-        description="冷启动 / 刷新提示词模板。占位符：{nickname}{personality}{reply_style}{name}{task_intro}{total_label}{dimensions_doc}{scores_keys_doc}{person_identities}{user_nickname}{group_cardname}{memory_points}{memory_block}{recent_chat}{refresh_guidance}{existing_block}{size_limit}。",
+        description="冷启动 / 刷新提示词模板。占位符：{nickname}{personality}{reply_style}{name}{task_intro}{total_label}{default_score}{scale_min}{scale_max}{dimensions_doc}{scores_keys_doc}{person_identities}{user_nickname}{group_cardname}{memory_points}{memory_block}{recent_chat}{refresh_guidance}{existing_block}{size_limit}。",
     )
     memory_search_limit: int | None = Field(
         default=None,
@@ -1709,7 +1784,6 @@ class AffinityPlugin(MaiBotPlugin):
             if not (platform and user_id):
                 return None
             ref = PersonRef(person_id=person_id, platform=platform, user_id=user_id)
-            ref.memory_points = await self._load_memory_points(ref, None)
             return ref
         ref = PersonRef(
             person_id=person_id,
@@ -1720,11 +1794,22 @@ class AffinityPlugin(MaiBotPlugin):
             group_cardnames=_parse_group_cardnames(info.get("group_cardname")),
             group_cardname_entries=_parse_group_cardname_entries(info.get("group_cardname")),
         )
-        ref.memory_points = await self._load_memory_points(ref, info.get("memory_points"))
         return ref
 
+    async def _load_memory_for_generation(self, ref: PersonRef) -> None:
+        """冷启动 / 刷新前加载长期记忆（含 knowledge.search）；仅发卡不调用。"""
+        db_raw: Any = None
+        info = await self.ctx.db.get(
+            model_name="PersonInfo",
+            filters={"person_id": ref.person_id},
+            single_result=True,
+        )
+        if isinstance(info, Mapping):
+            db_raw = info.get("memory_points")
+        ref.memory_points = await self._load_memory_points(ref, db_raw)
+
     async def _load_memory_points(self, ref: PersonRef, db_raw: Any) -> list[str]:
-        """从 PersonInfo 与 A_Memorix（经 knowledge.search）加载长期记忆，供冷启动 / 刷新提示词使用。"""
+        """从 PersonInfo 与 A_Memorix（经 knowledge.search）加载长期记忆，供冷启动 / 刷新 LLM 提示词使用。"""
         cold = self.config.cold_start
         max_items = _eint(cold.memory_max_items, DEFAULT_MEMORY_MAX_ITEMS, minimum=1)
         legacy_points = _parse_memory_points(db_raw)
@@ -2258,6 +2343,7 @@ class AffinityPlugin(MaiBotPlugin):
             "target 传 QQ 号、平台昵称、你给的别名（person_name）、群名片或 person_id；"
             "省略则发给当前发言者。"
             "若库中尚无该人档案会先冷启动生成；可选 refresh_first 在发送前重算分值与简介。"
+            "可选 radar_top_n 覆盖雷达图显示的维度数量（留空或 0 则用配置 radar_top_n）。"
         ),
         parameters=[
             _param(
@@ -2272,12 +2358,19 @@ class AffinityPlugin(MaiBotPlugin):
                 "发送前是否先刷新评估（同 refresh_impression）",
                 False,
             ),
+            _param(
+                "radar_top_n",
+                ToolParamType.INTEGER,
+                "雷达图显示几个得分最高的维度（0=用配置 radar_top_n）",
+                False,
+            ),
         ],
     )
     async def send_impression_card(
         self,
         target: str = "",
         refresh_first: bool = False,
+        radar_top_n: int = 0,
         **kwargs: Any,
     ) -> dict[str, str]:
         ref, error = await self._resolve_target(target, kwargs)
@@ -2289,7 +2382,11 @@ class AffinityPlugin(MaiBotPlugin):
         try:
             if refresh_first:
                 await self._refresh_record(ref, stream_id)
-            await self._generate_and_send_card(ref, stream_id)
+            radar_error = await self._generate_and_send_card(
+                ref, stream_id, radar_top_n=radar_top_n or None
+            )
+            if radar_error:
+                return {"content": radar_error}
         except Exception as exc:
             self.ctx.logger.error("send_impression_card 失败: %s", exc, exc_info=True)
             return {"content": "发送印象卡片时出错了……"}
@@ -2340,18 +2437,25 @@ class AffinityPlugin(MaiBotPlugin):
     # ------------------------------------------------------------------ #
     @Command(
         "impression_card",
-        pattern=r"^/(?:卡片|card)(?:\s+(?P<target>.+))?$",
-        description="查询印象卡片。/卡片 查自己，/卡片 @某人 或 /卡片 名字 查他人。",
+        pattern=r"^/(?:卡片|card|印象卡片(?!帮助)|impression_card(?!_))(?:\s+(?P<target>.+))?$",
+        description="查询印象卡片。/卡片 查自己，/卡片 @某人 或 /卡片 名字 查他人；可加 雷达:N 指定雷达显示维度数。",
     )
     async def cmd_card(self, **kwargs: Any) -> tuple[bool, str, int]:
         stream_id = _resolve_stream_id(kwargs)
-        ref, error = await self._resolve_query_target(kwargs)
+        query_kwargs, radar_top_n_spec = self._card_kwargs_with_radar_top_n(kwargs)
+        ref, error = await self._resolve_query_target(query_kwargs)
         if error or ref is None:
             if stream_id:
                 await self.ctx.send.text(error or "找不到这个人。", stream_id)
             return False, error or "解析对象失败", 2
         try:
-            await self._generate_and_send_card(ref, stream_id)
+            radar_error = await self._generate_and_send_card(
+                ref, stream_id, radar_top_n_spec=radar_top_n_spec
+            )
+            if radar_error:
+                if stream_id:
+                    await self.ctx.send.text(radar_error, stream_id)
+                return False, radar_error, 2
         except Exception as exc:
             self.ctx.logger.error("生成印象卡片失败: %s", exc, exc_info=True)
             if stream_id:
@@ -2360,20 +2464,40 @@ class AffinityPlugin(MaiBotPlugin):
         return True, "已发送好感度卡", 2
 
     @Command(
+        "impression_card_help",
+        pattern=r"^/(?:印象卡片帮助|impression_card_help)(?:\s*)$",
+        aliases=["/卡片帮助", "/card_help"],
+        description="显示印象卡片插件的命令、工具与雷达维度用法帮助。",
+    )
+    async def cmd_help(self, **kwargs: Any) -> tuple[bool, str, int]:
+        stream_id = _resolve_stream_id(kwargs)
+        text = self._impression_help_text()
+        if stream_id:
+            await self.ctx.send.text(text, stream_id)
+        return True, "已发送帮助", 1
+
+    @Command(
         "impression_refresh",
         pattern=r"^/(?:刷新印象|refresh_impression)(?:\s+(?P<target>.+))?$",
-        description="刷新对某人的印象（重算各项分值与简介）。/刷新印象 或 /刷新印象 @某人。",
+        description="刷新对某人的印象（重算各项分值与简介）。/刷新印象 或 /刷新印象 @某人；可加 雷达:N 指定雷达显示维度数。",
     )
     async def cmd_refresh(self, **kwargs: Any) -> tuple[bool, str, int]:
         stream_id = _resolve_stream_id(kwargs)
-        ref, error = await self._resolve_query_target(kwargs)
+        query_kwargs, radar_top_n_spec = self._card_kwargs_with_radar_top_n(kwargs)
+        ref, error = await self._resolve_query_target(query_kwargs)
         if error or ref is None:
             if stream_id:
                 await self.ctx.send.text(error or "找不到这个人。", stream_id)
             return False, error or "解析对象失败", 2
         try:
             await self._refresh_record(ref, stream_id)
-            await self._generate_and_send_card(ref, stream_id)
+            radar_error = await self._generate_and_send_card(
+                ref, stream_id, radar_top_n_spec=radar_top_n_spec
+            )
+            if radar_error:
+                if stream_id:
+                    await self.ctx.send.text(radar_error, stream_id)
+                return False, radar_error, 2
         except Exception as exc:
             self.ctx.logger.error("刷新印象卡片失败: %s", exc, exc_info=True)
             if stream_id:
@@ -2421,6 +2545,7 @@ class AffinityPlugin(MaiBotPlugin):
     async def _generate_record(
         self, ref: PersonRef, stream_id: str, *, existing: Optional[AffinityRecord]
     ) -> AffinityRecord:
+        await self._load_memory_for_generation(ref)
         cold = self.config.cold_start
         model = _estr(cold.model, DEFAULT_COLD_START_MODEL)
         is_refresh = existing is not None
@@ -2459,6 +2584,9 @@ class AffinityPlugin(MaiBotPlugin):
             name=ref.display_name,
             task_intro=task_intro,
             total_label=self._total_label,
+            default_score=_fmt_num(self._default_score),
+            scale_min=_fmt_num(self._scale_min),
+            scale_max=_fmt_num(self._scale_max),
             dimensions_doc=dimensions_doc,
             scores_keys_doc=scores_keys_doc,
             person_identities=_format_person_identities(ref, stored_display_name=stored_display_name),
@@ -2551,10 +2679,22 @@ class AffinityPlugin(MaiBotPlugin):
     # ------------------------------------------------------------------ #
     # 卡片生成与发送
     # ------------------------------------------------------------------ #
-    async def _generate_and_send_card(self, ref: PersonRef, stream_id: str) -> None:
+    async def _generate_and_send_card(
+        self,
+        ref: PersonRef,
+        stream_id: str,
+        *,
+        radar_top_n: Optional[int] = None,
+        radar_top_n_spec: str = "",
+    ) -> Optional[str]:
+        """生成并发送印象卡片。成功返回 None，雷达参数错误时返回用户可见说明。"""
         if not stream_id:
-            return
+            return None
         record = await self._load_or_create(ref, stream_id)
+        top_n, radar_error = self._resolve_radar_top_n(radar_top_n_spec, override=radar_top_n)
+        if radar_error:
+            return radar_error
+        radar_dims = self._top_dimensions(record, top_n=top_n)
         img_cfg = self.config.image
 
         # 头像决定是否出动图：头像本身是动图（且开启）→ 卡片做成动图；否则静态单张。
@@ -2585,7 +2725,9 @@ class AffinityPlugin(MaiBotPlugin):
                 avatar_html = f'<div class="avatar" style="background-color:{AVATAR_CHROMA_HTML_COLOR};"></div>'
             else:
                 avatar_html = self._static_avatar_html(ref, avatar_bytes, avatar_frames)
-            html = _wrap_card_html_for_render(await self._build_card_html(ref, record, avatar_html))
+            html = _wrap_card_html_for_render(
+                await self._build_card_html(ref, record, avatar_html, radar_dims=radar_dims)
+            )
             render_result = await self.ctx.render.html2png(
                 html,
                 selector="#card",
@@ -2605,7 +2747,7 @@ class AffinityPlugin(MaiBotPlugin):
                 stream_id,
             )
             await self._inject_impression_context(stream_id, ref, record)
-            return
+            return None
 
         bg = _estr(img_cfg.background_color, DEFAULT_BACKGROUND_COLOR)
         webp_q = _eint(img_cfg.webp_quality, DEFAULT_WEBP_QUALITY, minimum=1)
@@ -2636,6 +2778,55 @@ class AffinityPlugin(MaiBotPlugin):
         else:
             await self.ctx.send.image(out_b64, stream_id)
         await self._inject_impression_context(stream_id, ref, record)
+        return None
+
+    def _card_kwargs_with_radar_top_n(self, kwargs: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        patched = dict(kwargs)
+        matched = dict(kwargs.get("matched_groups") or {})
+        target_text, radar_top_n_spec = _parse_radar_top_n_arg(str(matched.get("target") or ""))
+        matched["target"] = target_text
+        patched["matched_groups"] = matched
+        return patched, radar_top_n_spec
+
+    def _resolve_radar_top_n(
+        self, spec: str, *, override: Optional[int] = None
+    ) -> tuple[int, str]:
+        """解析雷达 top_n：工具 override 优先，其次命令里的 雷达:N，否则用配置。"""
+        if override is not None and int(override) >= 1:
+            return int(override), ""
+        raw = str(spec or "").strip()
+        if not raw:
+            return self._radar_top_n, ""
+        if not re.fullmatch(r"\d+", raw):
+            return self._radar_top_n, "雷达参数请填数字 N（显示得分最高的 N 个维度），例如 雷达:5。"
+        n = int(raw)
+        if n < 1:
+            return self._radar_top_n, "雷达维度数量至少为 1。"
+        return n, ""
+
+    def _impression_help_text(self) -> str:
+        return "\n".join(
+            [
+                "【印象卡片 · 帮助】",
+                "",
+                "命令：",
+                "· /卡片 /印象卡片 /impression_card — 发送印象卡片（省略对象=自己）",
+                "· /刷新印象 /refresh_impression — 重算印象后再发卡",
+                "· /印象卡片帮助 /impression_card_help — 显示本帮助",
+                "",
+                "雷达图维度数（可选）：",
+                f"· 默认显示 radar_top_n 项（当前 {self._radar_top_n}）",
+                "· 取得分最高的 N 项；若有负分则显示最高 N−1 项 + 最低 1 项",
+                "· 命令末尾加 雷达:N / radar:N / top_n:N",
+                "  例：/卡片 @某人 雷达:8",
+                "  例：/impression_card 雷达:3",
+                "",
+                "麦麦工具 send_impression_card：",
+                "· target — 对象（可省略）",
+                "· refresh_first — 发送前是否刷新",
+                "· radar_top_n — 雷达显示维度数（0=用配置）",
+            ]
+        )
 
     def _static_avatar_html(self, ref: PersonRef, avatar_bytes: Optional[bytes], frames: list[Any]) -> str:
         """静态路径的头像 HTML：动图头像（被关停动图）取首帧；普通静态头像内嵌原图；都没有则首字占位。"""
@@ -2652,22 +2843,26 @@ class AffinityPlugin(MaiBotPlugin):
         initial = (ref.display_name or "?")[:1]
         return f'<div class="avatar avatar-placeholder">{_html_escape(initial)}</div>'
 
-    def _top_dimensions(self, record: AffinityRecord) -> list[tuple[str, float]]:
-        """挑出最极端（离中间值最远）的若干维度用于雷达图。"""
-        mid = self._default_score
-        scored = [(d.label, self._get_score(record, d.key), abs(self._get_score(record, d.key) - mid)) for d in self._dimensions]
-        scored.sort(key=lambda x: x[2], reverse=True)
-        top = scored[: max(1, self._radar_top_n)]
-        # 维持原维度顺序更稳定
-        chosen_labels = {label for label, _, _ in top}
-        ordered = [(d.label, self._get_score(record, d.key)) for d in self._dimensions if d.label in chosen_labels]
-        return ordered
+    def _top_dimensions(self, record: AffinityRecord, *, top_n: Optional[int] = None) -> list[tuple[str, float]]:
+        """挑出用于雷达图展示的若干维度（最高 N 项，或有负分时最高 N-1 + 最低 1）。"""
+        n = self._radar_top_n if top_n is None else max(1, int(top_n))
+        scored = [(d.label, self._get_score(record, d.key)) for d in self._dimensions]
+        return select_radar_dimensions(scored, top_n=n)
 
-    async def _build_card_html(self, ref: PersonRef, record: AffinityRecord, avatar_html: str) -> str:
+    async def _build_card_html(
+        self,
+        ref: PersonRef,
+        record: AffinityRecord,
+        avatar_html: str,
+        *,
+        radar_dims: Optional[list[tuple[str, float]]] = None,
+    ) -> str:
         template = self._load_card_template()
         bot_name = await self.ctx.config.get("bot.nickname", "麦麦") or "麦麦"
-        top_dims = self._top_dimensions(record)
-        radar_svg = build_radar_svg(top_dims, self._scale_max, size=CARD_RADAR_SVG_SIZE)
+        top_dims = radar_dims if radar_dims is not None else self._top_dimensions(record)
+        radar_svg = build_radar_svg(
+            top_dims, self._scale_max, size=CARD_RADAR_SVG_SIZE, scale_min=self._scale_min
+        )
         gauge_bar = build_gauge_bar_svg(record.total, self._scale_max, self._scale_min)
         legend_html = build_legend_html(top_dims)
 

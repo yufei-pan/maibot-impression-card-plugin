@@ -20,7 +20,7 @@ config_version = "0.2.1"
 # scale_min = 0.0
 # 是否允许通过 @某人 / 名字 查询他人的卡片（false 则只能查自己）。
 # allow_query_others = true
-# 雷达图最多显示几项（按偏离中间值最远，即最极端的项优先；其余维度仍会记录）。
+# 雷达图最多显示几项：默认取得分最高的 N 项；若有负分则显示最高 N-1 项与最低 1 项。
 # radar_top_n = 5
 # 冷启动 / 刷新印象时参考的最近聊天条数。
 # recent_messages_limit = 1024
@@ -29,7 +29,7 @@ config_version = "0.2.1"
 # SQLite 数据文件路径；相对路径基于插件目录解析（跨私聊/群聊共用一份）。
 # store_path = "data/affinity.sqlite3"
 
-# 好感度子项维度（可任意多项；卡面只显示最极端的 radar_top_n 项）。
+# 好感度子项维度（可任意多项；卡面雷达只显示 radar_top_n 项，见 radar_top_n 说明）。
 # 默认不写任何 [[dimensions]]，使用插件内置的 22 项默认维度（混合养成 / 抽象 meme / RPG 属性，对齐大阿尔卡纳数量），
 # 这样插件升级新增维度时你也能自动用上。需要自定义时，取消下面注释照葫芦画瓢增删即可。
 # 改 label / 顺序而保持 key 不变不会丢数据；改 key 视为新维度（旧值默认保留在库中）。
@@ -110,7 +110,7 @@ config_version = "0.2.1"
 # 冷启动 / 刷新的最大 token；0 为自动。
 # max_tokens = 0
 # 冷启动 / 刷新提示词模板。占位符：
-# {nickname}{personality}{reply_style}{name}{task_intro}{total_label}{dimensions_doc}{scores_keys_doc}
+# {nickname}{personality}{reply_style}{name}{task_intro}{total_label}{default_score}{scale_min}{scale_max}
 # {person_identities}{user_nickname}{group_cardname}{memory_points}{memory_block}{recent_chat}{refresh_guidance}{existing_block}{size_limit}
 # prompt_template = ""
 # 每次 knowledge.search 单次返回条数（search+aggregate 各调一次；默认 50）。

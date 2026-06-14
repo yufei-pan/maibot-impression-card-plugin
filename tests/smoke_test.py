@@ -266,6 +266,12 @@ def test_animated_encoding() -> None:
 def test_helpers() -> None:
     assert affinity._fmt_num(5.0) == "5"
     assert affinity._fmt_num(5.5) == "5.5"
+    guidance = affinity._score_guidance_text(default_score=7.0, scale_min=0.0, scale_max=20.0)
+    assert "7" in guidance and "0–20" in guidance
+    radar_mid = affinity.build_radar_svg([("A", 5.0)], scale_max=10.0, scale_min=0.0)
+    assert radar_mid.startswith("<svg")
+    radar_span = affinity.build_radar_svg([("A", 5.0)], scale_max=15.0, scale_min=-5.0)
+    assert radar_span.startswith("<svg")
     assert affinity._fmt_delta(3) == "+3"
     assert affinity._fmt_delta(-2.5) == "-2.5"
     assert affinity._extract_json_object('前言 {"a": 1} 后语') == {"a": 1}
@@ -381,6 +387,44 @@ def test_identity_resolution() -> None:
     print("ok: identity resolution from top-level kwargs / message dict / at / reply")
 
 
+def test_select_radar_dimensions() -> None:
+    dims = [("A", 9.0), ("B", 8.0), ("C", 5.5), ("D", 1.0), ("E", 5.0)]
+    assert affinity.select_radar_dimensions(dims, top_n=3) == [("A", 9.0), ("B", 8.0), ("C", 5.5)]
+    with_neg = [("A", 9.0), ("B", 8.0), ("C", 5.0), ("D", 4.0), ("E", -2.0)]
+    assert affinity.select_radar_dimensions(with_neg, top_n=5) == [
+        ("A", 9.0),
+        ("B", 8.0),
+        ("C", 5.0),
+        ("D", 4.0),
+        ("E", -2.0),
+    ]
+    assert affinity.select_radar_dimensions(with_neg, top_n=3) == [("A", 9.0), ("B", 8.0), ("E", -2.0)]
+    print("ok: select_radar_dimensions")
+
+
+def test_parse_radar_top_n_arg() -> None:
+    assert affinity._parse_radar_top_n_arg("") == ("", "")
+    assert affinity._parse_radar_top_n_arg("demonte") == ("demonte", "")
+    assert affinity._parse_radar_top_n_arg("demonte 雷达:8") == ("demonte", "8")
+    assert affinity._parse_radar_top_n_arg("雷达维度:3") == ("", "3")
+    assert affinity._parse_radar_top_n_arg("top_n:5") == ("", "5")
+    print("ok: radar top_n arg parsing")
+
+
+def test_resolve_radar_top_n() -> None:
+    inst = affinity.create_plugin()
+    inst._radar_top_n = 5
+    n, err = inst._resolve_radar_top_n("")
+    assert not err and n == 5
+    n, err = inst._resolve_radar_top_n("3")
+    assert not err and n == 3
+    n, err = inst._resolve_radar_top_n("", override=7)
+    assert not err and n == 7
+    n, err = inst._resolve_radar_top_n("abc")
+    assert err and n == 5
+    print("ok: resolve radar top_n")
+
+
 def test_top_dimensions_selection() -> None:
     inst = affinity.create_plugin()
     inst._dimensions = affinity.resolve_dimensions(None)
@@ -392,9 +436,12 @@ def test_top_dimensions_selection() -> None:
     )
     top = inst._top_dimensions(record)
     labels = {label for label, _ in top}
-    # 最极端三项：trust(|9-5|=4)、joy(|1-5|=4)、clinginess(|8-5|=3)
-    assert labels == {"信赖", "欢乐", "贴贴"}, labels
-    print("ok: top dimension selection picks most extreme")
+    assert labels == {"信赖", "贴贴", "省心"}, labels
+    record.scores["joy"] = -2.0
+    top = inst._top_dimensions(record)
+    labels = {label for label, _ in top}
+    assert labels == {"信赖", "贴贴", "欢乐"}, labels
+    print("ok: top dimension selection picks highest and lowest negative")
 
 
 def main() -> None:
@@ -411,6 +458,9 @@ def main() -> None:
     test_static_encoding()
     test_animated_encoding()
     test_helpers()
+    test_parse_radar_top_n_arg()
+    test_resolve_radar_top_n()
+    test_select_radar_dimensions()
     test_identity_resolution()
     test_top_dimensions_selection()
     print("\n全部冒烟测试通过")
