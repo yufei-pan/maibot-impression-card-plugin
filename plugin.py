@@ -57,7 +57,25 @@ DEFAULT_SCORE = 5.0
 _SCORE_GUIDANCE_FOR_TOOLS = (
     "各维度与总值的默认中间值是 5；"
     "虽无硬性上下限，但一般会在 0–10 之间浮动，少数情况可故意越界以达成夸张效果。"
+    "所有子项均为「越高越好」的正向表述：加分表示认可，扣分表示不满。"
 )
+
+# 旧版 key / 标签 → 现行 key（开发期兼容，可选）。
+LEGACY_DIMENSION_ALIASES: dict[str, str] = {
+    "trouble": "peace",
+    "麻烦": "peace",
+    "麻烦度": "peace",
+    "threat": "safety",
+    "威胁": "safety",
+    "威胁度": "safety",
+    "fun": "abstract",
+    "有趣": "abstract",
+    "steadiness": "chaos",
+    "稳重": "chaos",
+    "obedience": "rebellion",
+    "听话": "rebellion",
+    "反骨": "rebellion",
+}
 DEFAULT_SCALE_MAX = 10.0
 DEFAULT_SCALE_MIN = 0.0
 DEFAULT_TOTAL_LABEL = "好感度"
@@ -70,31 +88,31 @@ DEFAULT_STORE_PATH = "data/affinity.sqlite3"
 DEFAULT_CARD_TITLE = "{bot_name}的印象档案"
 DEFAULT_CARD_TEMPLATE = "assets/parchment.html"
 
-# 出厂默认维度集（混合养成 / 抽象 meme / RPG 属性，共 22 项，对齐大阿尔卡纳数量；可在 config.toml 任意增删改）。
-# 卡面雷达只显示其中最极端的 radar_top_n 项，所以维度多无妨。
+# 出厂默认维度集（共 22 项，对齐大阿尔卡纳数量；可在 config.toml 任意增删改）。
+# 标签统一为正向表述：加分=认可，扣分=不满；key 变更见 LEGACY_DIMENSION_ALIASES。
 DEFAULT_DIMENSIONS: list[dict[str, str]] = [
-    {"key": "familiarity", "label": "熟悉度", "description": "认识多久、了解多深"},
-    {"key": "trust", "label": "信赖度", "description": "麦麦对 ta 的信任程度"},
-    {"key": "joy", "label": "欢乐值", "description": "带来的快乐 / 整活贡献"},
-    {"key": "trouble", "label": "麻烦度", "description": "添乱、逆天、不可控程度（常为负）"},
-    {"key": "clinginess", "label": "贴贴度", "description": "亲密 / 粘人程度"},
-    {"key": "abstract", "label": "抽象度", "description": "发言抽象、逆天、不可名状的程度"},
+    {"key": "familiarity", "label": "熟悉", "description": "认识多久、了解多深"},
+    {"key": "trust", "label": "信赖", "description": "麦麦对 ta 的信任程度"},
+    {"key": "joy", "label": "欢乐", "description": "带来的快乐与整活贡献"},
+    {"key": "peace", "label": "省心", "description": "乖巧省心、少添乱"},
+    {"key": "clinginess", "label": "贴贴", "description": "亲密与粘人程度"},
+    {"key": "abstract", "label": "抽象", "description": "发言抽象整活、不可名状但乐子足"},
     {"key": "quality", "label": "含金量", "description": "发言的质量与信息含量"},
-    {"key": "wavelength", "label": "电波", "description": "和麦麦的脑电波契合程度"},
-    {"key": "threat", "label": "威胁度", "description": "对麦麦的威胁 / 危险程度"},
-    {"key": "generosity", "label": "慷慨度", "description": "投喂、发红包、请客的大方程度"},
-    {"key": "intelligence", "label": "智力", "description": "INT，脑子转得快不快"},
-    {"key": "charm", "label": "魅力", "description": "CHA，讨不讨人喜欢"},
-    {"key": "vitality", "label": "活跃", "description": "VIT，在群里的活跃度 / 体力"},
-    {"key": "luck", "label": "幸运", "description": "LUK，欧不欧、运气好不好"},
-    {"key": "chaos", "label": "混沌", "description": "CHAOS，行为的不可预测程度"},
-    {"key": "chuuni", "label": "中二度", "description": "中二、戏精、自我设定的浓度"},
-    {"key": "fate", "label": "缘分", "description": "和麦麦的宿命契合、羁绊深浅"},
-    {"key": "intuition", "label": "直觉", "description": "读空气、猜中麦麦心思的能力"},
-    {"key": "rebellion", "label": "反骨", "description": "叛逆、抬杠、不按麦麦剧本走的程度"},
-    {"key": "mystery", "label": "神秘", "description": "人设谜团、难以捉摸的程度"},
-    {"key": "devotion", "label": "虔诚", "description": "对麦麦或本群的忠诚与 devotion"},
-    {"key": "hope", "label": "希望", "description": "给麦麦带来的期待感与正向可能"},
+    {"key": "wavelength", "label": "合拍", "description": "和麦麦聊得来、脑电波契合"},
+    {"key": "safety", "label": "安心", "description": "相处让人放心、不觉得有威胁"},
+    {"key": "generosity", "label": "慷慨", "description": "投喂、发红包、请客的大方程度"},
+    {"key": "intelligence", "label": "智力", "description": "脑子转得快不快"},
+    {"key": "charm", "label": "魅力", "description": "讨不讨人喜欢"},
+    {"key": "vitality", "label": "活跃", "description": "在群里的活跃度与参与感"},
+    {"key": "luck", "label": "幸运", "description": "欧不欧、运气好不好"},
+    {"key": "chaos", "label": "混沌", "description": "带来的混沌感与活力、不可预测的乐子"},
+    {"key": "chuuni", "label": "中二", "description": "中二戏精浓度（高也可能是萌点）"},
+    {"key": "fate", "label": "缘分", "description": "和麦麦的羁绊与宿命契合"},
+    {"key": "intuition", "label": "直觉", "description": "读空气、猜中麦麦心思"},
+    {"key": "rebellion", "label": "不羁", "description": "自由不羁、有主见不按套路出牌"},
+    {"key": "mystery", "label": "神秘", "description": "人设留有悬念、让人想继续了解"},
+    {"key": "devotion", "label": "虔诚", "description": "对麦麦或本群的忠诚与向心力"},
+    {"key": "hope", "label": "希望", "description": "带来的期待感与正向可能"},
 ]
 
 # 图片输出。
@@ -145,7 +163,7 @@ DEFAULT_COLD_START_PROMPT_TEMPLATE = """你是{nickname}。
 
 你要为群友「{name}」建立一份「好感度档案」。这是一个欢乐向的设定，请完全以你的视角、按你的喜好与脾气来打分，可以主观、可以毒舌、可以偏心，不必客观中立。
 
-评分维度（每项参考区间 0-10，5 为中间值；为了表达强烈态度，允许给出负数或超过 10 的极端值）：
+评分维度（每项参考 0-10，5 为中间值；分数越高表示你越认可该项；加分=奖励、扣分=不满。各维度均为正向表述，允许极端越界）：
 {dimensions_doc}
 
 同时给一个「{total_label}」总分（同样以 0-10 为参考，可越界）。
@@ -167,7 +185,7 @@ NOTIFY_ALL_TOKENS = frozenset({"*", "all", "全部"})
 DEFAULT_NOTIFY_TEMPLATE = """━━━━━━━━━━━━━━
 　【系统通知】数值变动
 　对象：{name}
-　{dimension}　{delta}　→　当前 {new_value}
+　{dimension}　{delta}
 　缘由：{reason}
 ━━━━━━━━━━━━━━"""
 
@@ -179,8 +197,9 @@ VALID_STATIC_FORMATS = frozenset({"webp", "static_webp", "png", "jpg", "jpeg"})
 VALID_ANIMATED_FORMATS = frozenset({"animated_webp", "apng", "gif"})
 
 # 卡片渲染视口（实际像素会再乘 device_scale_factor）。
-CARD_VIEWPORT = {"width": 940, "height": 560}
+CARD_VIEWPORT = {"width": 940, "height": 500}
 CARD_DEVICE_SCALE = 2.0
+CARD_RADAR_SVG_SIZE = 400
 
 
 # --------------------------------------------------------------------------- #
@@ -303,15 +322,17 @@ def build_radar_svg(dims: list[tuple[str, float]], scale_max: float, size: int =
     if n == 0 or scale_max <= 0:
         return ""
 
-    # 左右留足边距，避免 text-anchor=start/end 的标签被 viewBox 裁切。
-    pad_x = size * 0.20
-    pad_y = size * 0.12
-    view_w = size + 2 * pad_x
-    view_h = size + 2 * pad_y
-    cx = pad_x + size / 2.0
-    cy = pad_y + size / 2.0
-    outer = size * 0.30  # value == scale_max 时的半径
-    label_r = outer + size * 0.075
+    # 几何：外环尽量大、viewBox 贴紧标签边界，避免缩放后四周留白。
+    outer = size * 0.39
+    label_r = outer + size * 0.044
+    text_pad = size * 0.05
+    top_pad = text_pad + size * 0.022
+    half_w = label_r + text_pad
+    half_h = label_r + top_pad
+    cx = half_w
+    cy = half_h
+    view_w = 2 * half_w
+    view_h = 2 * half_h
 
     def angle(i: int) -> float:
         return -math.pi / 2.0 + 2.0 * math.pi * i / n
@@ -377,14 +398,11 @@ def build_radar_svg(dims: list[tuple[str, float]], scale_max: float, size: int =
         if math.sin(a) < -0.4:
             dy = -2.0
         elif math.sin(a) > 0.4:
-            dy = size * 0.018
+            dy = size * 0.012
         parts.append(
             f'<text class="axis-label" x="{lx:.1f}" y="{ly + dy:.1f}" '
-            f'text-anchor="{anchor}">{_html_escape(label)}</text>'
-        )
-        parts.append(
-            f'<text class="axis-value" x="{lx:.1f}" y="{ly + dy + size*0.045:.1f}" '
-            f'text-anchor="{anchor}">{_html_escape(_fmt_num(value))}</text>'
+            f'text-anchor="{anchor}">{_html_escape(label)} '
+            f'<tspan class="axis-value">{_html_escape(_fmt_num(value))}</tspan></text>'
         )
 
     parts.append("</svg>")
@@ -910,7 +928,7 @@ class NotifySectionConfig(PluginConfigBase):
     notify_template: str = Field(
         default="",
         json_schema_extra={"placeholder": DEFAULT_NOTIFY_TEMPLATE},
-        description="系统通知文案模板。占位符：{name}{dimension}{delta}{new_value}{reason}{nickname}。",
+        description="系统通知文案模板。占位符：{name}{dimension}{delta}{reason}{nickname}；可选 {new_value}。",
     )
 
 
@@ -1546,6 +1564,10 @@ class AffinityPlugin(MaiBotPlugin):
         lowered = raw.lower()
         if lowered in ("total", "好感度", "") or raw == self._total_label:
             return "total", self._total_label, None
+        canonical = LEGACY_DIMENSION_ALIASES.get(raw) or LEGACY_DIMENSION_ALIASES.get(lowered)
+        if canonical:
+            raw = canonical
+            lowered = canonical.lower()
         for dim in self._dimensions:
             if raw == dim.key or lowered == dim.key.lower() or raw == dim.label:
                 return dim.key, dim.label, None
@@ -2134,7 +2156,7 @@ class AffinityPlugin(MaiBotPlugin):
         template = self._load_card_template()
         bot_name = await self.ctx.config.get("bot.nickname", "麦麦") or "麦麦"
         top_dims = self._top_dimensions(record)
-        radar_svg = build_radar_svg(top_dims, self._scale_max)
+        radar_svg = build_radar_svg(top_dims, self._scale_max, size=CARD_RADAR_SVG_SIZE)
         gauge_bar = build_gauge_bar_svg(record.total, self._scale_max, self._scale_min)
         legend_html = build_legend_html(top_dims)
 

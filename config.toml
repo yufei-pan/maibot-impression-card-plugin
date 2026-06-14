@@ -33,22 +33,22 @@ config_version = "0.2.0"
 # 默认不写任何 [[dimensions]]，使用插件内置的 22 项默认维度（混合养成 / 抽象 meme / RPG 属性，对齐大阿尔卡纳数量），
 # 这样插件升级新增维度时你也能自动用上。需要自定义时，取消下面注释照葫芦画瓢增删即可。
 # 改 label / 顺序而保持 key 不变不会丢数据；改 key 视为新维度（旧值默认保留在库中）。
+# v0.2+ 重命名：trouble→peace、threat→safety（其余 key 保持 abstract / chaos / rebellion 等）
 #
 # 内置默认 22 项（key — label）：
-#   familiarity熟悉度 trust信赖度 joy欢乐值 trouble麻烦度 clinginess贴贴度
-#   abstract抽象度 quality含金量 wavelength电波 threat威胁度 generosity慷慨度
-#   intelligence智力 charm魅力 vitality活跃 luck幸运 chaos混沌 chuuni中二度
-#   fate缘分 intuition直觉 rebellion反骨 mystery神秘 devotion虔诚 hope希望
+#   familiarity熟悉 trust信赖 joy欢乐 peace省心 clinginess贴贴 abstract抽象 quality含金量
+#   wavelength合拍 safety安心 generosity慷慨 intelligence智力 charm魅力 vitality活跃 luck幸运
+#   chaos混沌 chuuni中二 fate缘分 intuition直觉 rebellion不羁 mystery神秘 devotion虔诚 hope希望
 #
 # [[dimensions]]
 # key = "familiarity"
-# label = "熟悉度"
+# label = "熟悉"
 # description = "认识多久、了解多深"
 #
 # [[dimensions]]
 # key = "abstract"
-# label = "抽象度"
-# description = "发言抽象、逆天、不可名状的程度"
+# label = "抽象"
+# description = "发言抽象整活、不可名状但乐子足"
 
 [card]
 # 卡片顶部居中的标题。支持占位符 {bot_name}、{person_name}。
@@ -115,5 +115,5 @@ config_version = "0.2.0"
 # enabled = true
 # 播报哪些维度变化：["total"] 只播报好感度；["*"] 播报所有；[] 不播报。维度用 key 或 total。
 # notify_dimensions = ["total"]
-# 系统通知文案模板。占位符：{name}{dimension}{delta}{new_value}{reason}{nickname}
+# 系统通知文案模板。占位符：{name}{dimension}{delta}{reason}{nickname}；可选 {new_value}
 # notify_template = ""

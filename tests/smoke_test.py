@@ -87,7 +87,7 @@ def test_resolve_dimensions_default() -> None:
     dims = affinity.resolve_dimensions(None)
     keys = [d.key for d in dims]
     assert len(keys) == 22, keys
-    assert keys[:5] == ["familiarity", "trust", "joy", "trouble", "clinginess"]
+    assert keys[:5] == ["familiarity", "trust", "joy", "peace", "clinginess"]
     assert {"abstract", "quality", "intelligence", "chaos", "chuuni"} <= set(keys)
     # 空列表也回退默认
     assert affinity.resolve_dimensions([]) == dims
@@ -112,7 +112,7 @@ def test_effective_helpers() -> None:
 
 
 def test_svg_generation() -> None:
-    dims = [("熟悉度", 8.0), ("信赖度", 3.0), ("欢乐值", 12.0), ("麻烦度", -4.0), ("贴贴度", 6.0)]
+    dims = [("熟悉", 8.0), ("信赖", 3.0), ("欢乐", 12.0), ("省心", -4.0), ("贴贴", 6.0)]
     radar = affinity.build_radar_svg(dims, scale_max=10.0)
     assert radar.startswith("<svg") and radar.endswith("</svg>")
     assert "radar-sector-pos" in radar and "radar-sector-neg" in radar and "axis-label" in radar
@@ -311,12 +311,12 @@ def test_top_dimensions_selection() -> None:
     inst._radar_top_n = 3
     record = affinity.AffinityRecord(
         person_id="p1",
-        scores={"familiarity": 5.0, "trust": 9.0, "joy": 1.0, "trouble": 5.5, "clinginess": 8.0},
+        scores={"familiarity": 5.0, "trust": 9.0, "joy": 1.0, "peace": 5.5, "clinginess": 8.0},
     )
     top = inst._top_dimensions(record)
     labels = {label for label, _ in top}
     # 最极端三项：trust(|9-5|=4)、joy(|1-5|=4)、clinginess(|8-5|=3)
-    assert labels == {"信赖度", "欢乐值", "贴贴度"}, labels
+    assert labels == {"信赖", "欢乐", "贴贴"}, labels
     print("ok: top dimension selection picks most extreme")
 
 

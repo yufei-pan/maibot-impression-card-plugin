@@ -41,8 +41,8 @@
     display: grid;
     grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    gap: 16px;
-    padding: 18px 26px 12px;
+    gap: 14px;
+    padding: 14px 22px 8px;
   }
   .tb-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
   .tb-center {
@@ -71,7 +71,7 @@
   .score-unit { font-size: 15px; font-weight: 600; color: #9a6a32; margin-left: 4px; }
 
   /* —— 量表条 —— */
-  .gauge { padding: 2px 8px 14px; overflow: visible; }
+  .gauge { padding: 0 8px 8px; overflow: visible; }
   .gauge svg { width: 100%; height: auto; display: block; overflow: visible; }
 
   /* —— 下方主区域（T 的竖，左右两块） —— */
@@ -80,26 +80,28 @@
     border-top: 2px solid rgba(138,90,43,0.5);
     border-radius: 0 0 16px 16px;
     overflow: visible;
+    align-items: flex-start;
   }
   .left {
-    width: 45%;
-    padding: 18px 16px 22px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    width: 55%;
+    padding: 14px 4px 8px;
+    display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start;
+    gap: 4px;
     border-right: 3px dashed rgba(138,90,43,0.55);
   }
-  .left .radar { width: 100%; max-width: 340px; overflow: visible; }
-  .left .radar svg { display: block; width: 100%; height: auto; overflow: visible; }
-  .right { flex: 1; padding: 20px 26px 24px; display: flex; flex-direction: column; }
+  .left .radar { width: 100%; overflow: visible; flex-shrink: 0; display: flex; justify-content: center; padding-top: 4px; }
+  .left .radar svg { display: block; height: 290px; width: auto; max-width: 100%; overflow: visible; }
+  .right { flex: 1; padding: 12px 20px 16px; display: flex; flex-direction: column; }
 
-  .desc-title { font-size: 16px; font-weight: 700; color: #7a4a1e; margin-bottom: 8px; }
+  .desc-title { font-size: 16px; font-weight: 700; color: #7a4a1e; margin-bottom: 6px; }
   .desc {
-    flex: 1; min-height: 240px;
-    font-size: 18px; line-height: 1.85; color: #4a3416; white-space: pre-wrap;
+    min-height: 0;
+    font-size: 17px; line-height: 1.72; color: #4a3416; white-space: pre-wrap;
     background: rgba(255,250,238,0.55); border: 1px solid rgba(138,90,43,0.35);
-    border-radius: 12px; padding: 16px 18px;
+    border-radius: 12px; padding: 12px 14px;
   }
 
-  .dim-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 10px; margin-top: 12px; }
+  .dim-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px 8px; margin-top: 4px; flex-shrink: 0; }
   .legend-item {
     display: flex; gap: 6px; align-items: baseline; font-size: 13px;
     background: rgba(255,250,238,0.6); border: 1px solid rgba(138,90,43,0.3);
@@ -116,8 +118,8 @@
   .radar-sector-over { fill: rgba(224,168,58,0.40); }
   .radar-stroke { stroke: #b5651d; stroke-width: 2.5; }
   .radar-vertex { fill: #8a4a18; }
-  .axis-label { fill: #6a3a10; font-size: 15px; font-weight: 700; }
-  .axis-value { fill: #9a6a32; font-size: 13px; font-weight: 700; }
+  .axis-label { fill: #6a3a10; font-size: 18px; font-weight: 700; }
+  .axis-value { fill: #9a6a32; font-size: 15px; font-weight: 700; }
 
   /* —— SVG：量表条 —— */
   .gauge-bar-track { fill: rgba(120,80,30,0.18); }

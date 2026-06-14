@@ -26,7 +26,7 @@
     box-shadow: inset 0 0 70px rgba(40,160,255,0.18), 0 0 24px rgba(60,200,255,0.25);
   }
 
-  .titlebar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding: 18px 26px 12px; }
+  .titlebar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px; padding: 14px 22px 8px; }
   .tb-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
   .tb-center {
     text-align: center; font-size: 24px; font-weight: 800; letter-spacing: 3px;
@@ -52,27 +52,29 @@
   .score-value { font-size: 40px; font-weight: 800; color: #74e9ff; line-height: 1.05; text-shadow: 0 0 14px rgba(80,220,255,0.6); }
   .score-unit { font-size: 15px; font-weight: 600; color: #9fdcff; margin-left: 4px; }
 
-  .gauge { padding: 2px 8px 14px; overflow: visible; }
+  .gauge { padding: 0 8px 8px; overflow: visible; }
   .gauge svg { width: 100%; height: auto; display: block; overflow: visible; }
 
-  .body { display: flex; border-top: 1px solid rgba(90,220,255,0.35); border-radius: 0 0 18px 18px; overflow: visible; }
+  .body { display: flex; border-top: 1px solid rgba(90,220,255,0.35); border-radius: 0 0 18px 18px; overflow: visible; align-items: flex-start; }
   .left {
-    width: 45%; padding: 18px 16px 22px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    width: 55%;
+    padding: 14px 4px 8px;
+    display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start;
+    gap: 4px;
     border-right: 1px solid rgba(90,220,255,0.3);
   }
-  .left .radar { width: 100%; max-width: 340px; overflow: visible; }
-  .left .radar svg { display: block; width: 100%; height: auto; overflow: visible; }
-  .right { flex: 1; padding: 20px 26px 24px; display: flex; flex-direction: column; }
-
-  .desc-title { font-size: 16px; font-weight: 700; color: #74e9ff; margin-bottom: 8px; letter-spacing: 1px; }
+  .left .radar { width: 100%; overflow: visible; flex-shrink: 0; display: flex; justify-content: center; padding-top: 4px; }
+  .left .radar svg { display: block; height: 290px; width: auto; max-width: 100%; overflow: visible; }
+  .right { flex: 1; padding: 12px 20px 16px; display: flex; flex-direction: column; }
+  .desc-title { font-size: 16px; font-weight: 700; color: #74e9ff; margin-bottom: 6px; letter-spacing: 1px; }
   .desc {
-    flex: 1; min-height: 240px; font-size: 18px; line-height: 1.85; color: #d7f6ff; white-space: pre-wrap;
+    min-height: 0;
+    font-size: 17px; line-height: 1.72; color: #d7f6ff; white-space: pre-wrap;
     background: rgba(20,40,75,0.55); border: 1px solid rgba(90,220,255,0.3);
-    border-radius: 12px; padding: 16px 18px; box-shadow: inset 0 0 24px rgba(40,160,255,0.12);
+    border-radius: 12px; padding: 12px 14px; box-shadow: inset 0 0 24px rgba(40,160,255,0.12);
   }
 
-  .dim-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 10px; margin-top: 12px; }
+  .dim-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px 8px; margin-top: 4px; flex-shrink: 0; }
   .legend-item {
     display: flex; gap: 6px; align-items: baseline; font-size: 13px;
     background: rgba(20,40,75,0.6); border: 1px solid rgba(90,220,255,0.3);
@@ -89,8 +91,8 @@
   .radar-sector-over { fill: rgba(180,107,255,0.38); }
   .radar-stroke { stroke: #5ad7ff; stroke-width: 2.5; }
   .radar-vertex { fill: #aef0ff; }
-  .axis-label { fill: #d7f6ff; font-size: 15px; font-weight: 700; }
-  .axis-value { fill: #74e9ff; font-size: 13px; font-weight: 700; }
+  .axis-label { fill: #d7f6ff; font-size: 18px; font-weight: 700; }
+  .axis-value { fill: #74e9ff; font-size: 15px; font-weight: 700; }
 
   /* —— SVG：量表条 —— */
   .gauge-bar-track { fill: rgba(90,220,255,0.16); }
