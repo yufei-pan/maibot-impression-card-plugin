@@ -102,6 +102,28 @@
 
 > 无需修改 MaiBot 主程序：记忆检索走内置 `knowledge.search` 能力（已在 `_manifest.json` 声明）。
 
+## 权限与网络边界
+
+声明的 `capabilities`（见 `_manifest.json`）全部是 Host SDK 暴露的能力字符串，无一处冗余：
+
+- **`database.get`**：读取 Host 内置 `PersonInfo` 表（身份解析、群名片匹配、`memory_points` 冷启动）。
+  好感度数据另存于插件自带的本地 SQLite（`data/affinity.sqlite3`），二者不同，`database.get` 仅用于读
+  `PersonInfo`，**确为必需**。冒烟测试 `test_manifest_capabilities_cover_usage` 会校验声明与源码用量一致。
+- **`person.get_value`**：仅在冷启动加载长期记忆时读取**唯一一个 key —— `memory_points`**（`PersonInfo`
+  里没有该字段时的回退路径），不读取任意 Person 字段。
+- 其余 `person.get_id` / `person.get_id_by_name` / `knowledge.search` / `llm.generate` / `render.html2png`
+  / `send.*` / `config.get` / `maisaka.context.append` 各对应一处明确用途。
+
+**出站网络**：插件唯一的对外请求是拉取 QQ 头像 —— `GET https://q1.qlogo.cn/g?b=qq&nk=<QQ号>&s=640`。
+
+- 协议 / 主机 / 路径**全部硬编码**，URL 中唯一被替换的 `<QQ号>` 必须先通过纯 ASCII 数字校验
+  （`_is_qq_user_id`），调用方无法注入 scheme / host，**不存在 SSRF 面**；只对平台属于 QQ 系
+  （`qq`/`qqguild`/`napcat`）的用户发起。
+- 发出的唯一数据是对方 QQ 号；8s 超时；失败即静默回退占位头像。
+- Host SDK **没有「出站网络」这一 capability**（`capabilities` 是封闭枚举，httpx 直接由插件进程发起、
+  不经 Host 令牌），因此 `_manifest.json` 无从声明；改以本节文档化来源与校验策略。
+- 需要纯离线 / 隐私场景，设 `[image] fetch_avatar = false` 即彻底关闭该请求。
+
 ## 配置
 
 所有可调项见 `config.default.toml`。除 `[[dimensions]]` 外的字段**留空 / 注释掉即用内置默认**；

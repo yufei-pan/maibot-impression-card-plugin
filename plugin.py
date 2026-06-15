@@ -116,6 +116,7 @@ DEFAULT_DIMENSIONS: list[dict[str, str]] = [
 # 否则输出单张静态图。卡片本身不再有任何合成动画效果。
 DEFAULT_STATIC_FORMAT = "webp"  # 静态输出：webp / png / jpg
 DEFAULT_ANIMATED_FORMAT = "animated_webp"  # 动图输出：animated_webp / apng / gif
+DEFAULT_FETCH_AVATAR = True  # 是否联网拉取 QQ 头像（false 则纯离线、卡面用占位）
 DEFAULT_ANIMATE_WITH_AVATAR = True  # 头像是动图时是否输出动图（false 则永远静态）
 DEFAULT_MAX_AVATAR_FRAMES = 30  # 动图头像最多取多少帧（超过则均匀抽样）
 DEFAULT_AVATAR_FRAME_FALLBACK_MS = 80  # 头像帧未带时长时的兜底每帧时长
@@ -200,9 +201,18 @@ DEFAULT_NOTIFY_TEMPLATE = """━━━━━━━━━━━━━━
 　缘由：{reason}
 ━━━━━━━━━━━━━━"""
 
+# 头像拉取是插件唯一的出站网络行为。Host 没有「出站网络」这一 capability 可声明，
+# 因此这里用固定常量约束以避免 SSRF：协议 / 主机 / 路径全部硬编码，URL 中唯一被替换的
+# {user_id} 必须先通过 _is_qq_user_id()（纯 ASCII 数字）校验，调用方无法注入 scheme/host。
 QQ_AVATAR_URL_TEMPLATE = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
 QQ_COMPATIBLE_PLATFORMS = frozenset({"qq", "qqguild", "napcat"})
 AVATAR_TIMEOUT_S = 8.0
+
+
+def _is_qq_user_id(user_id: str) -> bool:
+    """仅接受纯 ASCII 数字 QQ 号。str.isdigit() 会放行上标/全角等 Unicode 数字，
+    这里收紧为 ASCII，确保拼进固定头像 URL 时不可能产生意外字符。"""
+    return user_id.isascii() and user_id.isdigit()
 
 VALID_STATIC_FORMATS = frozenset({"webp", "static_webp", "png", "jpg", "jpeg"})
 VALID_ANIMATED_FORMATS = frozenset({"animated_webp", "apng", "gif"})
@@ -1051,6 +1061,14 @@ class ImageSectionConfig(PluginConfigBase):
         default=None,
         json_schema_extra={"placeholder": DEFAULT_ANIMATED_FORMAT},
         description="动图卡片的输出格式：animated_webp / apng / gif。（仅当头像本身是动图时才出动图。）",
+    )
+    fetch_avatar: bool | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": "true"},
+        description=(
+            "是否联网拉取 QQ 头像（GET https://q1.qlogo.cn 固定地址，仅凭 QQ 号）。"
+            " false 则完全离线、卡面用占位头像，不发起任何出站请求。"
+        ),
     )
     animate_with_avatar: bool | None = Field(
         default=None,
@@ -2911,8 +2929,10 @@ class AffinityPlugin(MaiBotPlugin):
             return fallback.read_text(encoding="utf-8")
 
     async def _fetch_avatar_bytes(self, ref: PersonRef) -> Optional[bytes]:
-        """拉取头像原始字节（保留动图）；非 QQ 系平台 / 非数字 user_id / 失败时返回 None。"""
-        if ref.platform.strip().lower() not in QQ_COMPATIBLE_PLATFORMS or not ref.user_id.isdigit():
+        """拉取头像原始字节（保留动图）；关闭联网 / 非 QQ 系平台 / 非数字 user_id / 失败时返回 None。"""
+        if not _ebool(self.config.image.fetch_avatar, DEFAULT_FETCH_AVATAR):
+            return None
+        if ref.platform.strip().lower() not in QQ_COMPATIBLE_PLATFORMS or not _is_qq_user_id(ref.user_id):
             return None
         url = QQ_AVATAR_URL_TEMPLATE.format(user_id=ref.user_id)
         try:

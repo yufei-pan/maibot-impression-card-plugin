@@ -62,6 +62,9 @@ config_version = "0.2.1"
 # 卡片本身没有任何合成动画。只有当用户头像本身是动图（gif/webp/apng 多帧）时，
 # 才把头像各帧合进卡片输出动图；否则输出静态单张。
 #
+# 是否联网拉取 QQ 头像（GET 固定地址 https://q1.qlogo.cn，仅凭 QQ 号，不接受外部 URL）。
+# false 则完全离线、卡面用占位头像，不发起任何出站请求。
+# fetch_avatar = true
 # 静态卡片输出格式：webp / png / jpg。
 # static_format = "webp"
 # 动图卡片输出格式：animated_webp / apng / gif。
