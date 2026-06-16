@@ -96,13 +96,23 @@
 1. **`PersonInfo.memory_points`**（若仍有数据）
 2. Host 能力 **`knowledge.search`**（底层 A_Memorix，按 `person_id` 与昵称等多路检索长期记忆）
 3. 全部已知身份指代（QQ 号、昵称、别名、群名片等）
-4. 最近 N 条聊天记录（默认 1024 条，`recent_messages_limit` 可配）
+4. 最近 N 条聊天记录（默认 512 条，`recent_messages_limit` 可配）
 
 `[cold_start]` 下还可调 `memory_search_limit`、`memory_max_items`、`memory_max_chars` 控制写入 prompt 的长期记忆规模。刷新印象时有独立的重评指引（`refresh_guidance`），避免分数惯性膨胀。
 
 > 无需修改 MaiBot 主程序：记忆检索走内置 `knowledge.search` 能力（已在 `_manifest.json` 声明）。
 
 ## 权限与网络边界
+
+### 刷新印象权限
+
+- **`refresh_admin_only`（默认 `true`）**：仅管理员可使用 `/刷新印象` 主动重算印象。
+- **`admin_qq_ids`**：管理员 QQ 号列表，例如 `["123456789", "987654321"]`。
+- `/卡片` 不受限；新用户查卡触发的冷启动生成也不受限。
+- 麦麦调用的工具（`refresh_impression`、`send_impression_card` 等）不受此限制。
+- 设为 `refresh_admin_only = false` 可恢复所有人可用 `/刷新印象`。
+
+> **从 v0.2.1 升级**：v0.2.2 起 `/刷新印象` 默认仅管理员可用。升级后请在 `config.toml` 的 `[general]` 中配置 `admin_qq_ids`（你的 QQ 号），或设 `refresh_admin_only = false` 恢复旧行为；未配置时所有人使用 `/刷新印象` 会收到提示。`/卡片` 与麦麦工具不受影响。
 
 声明的 `capabilities`（见 `_manifest.json`）全部是 Host SDK 暴露的能力字符串，无一处冗余：
 

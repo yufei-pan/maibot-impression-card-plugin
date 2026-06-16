@@ -83,6 +83,31 @@ def test_config_toml_consistent() -> None:
     print("ok: config.toml consistent with model")
 
 
+def test_config_schema_general_section() -> None:
+  schema = affinity.AffinityPlugin.build_config_schema()
+  general = schema["sections"]["general"]
+  assert general["title"] == "好感度"
+  field_names = set(general["fields"])
+  assert {"admin_qq_ids", "refresh_admin_only", "recent_messages_limit", "dimensions"} <= field_names
+  assert "general" not in schema["sections"] or schema["sections"].get("general", {}).get("title") != "通用设置"
+  print("ok: WebUI general section exposes affinity settings")
+
+
+def test_config_dimensions_migration() -> None:
+    legacy = {
+        "plugin": {"enabled": True, "config_version": affinity.CURRENT_CONFIG_VERSION},
+        "general": {"total_label": "好感度"},
+        "dimensions": [{"key": "a", "label": "甲"}],
+    }
+    migrated = affinity._migrate_config_dict(legacy)
+    assert migrated["general"]["dimensions"] == [{"key": "a", "label": "甲"}]
+    assert "dimensions" not in migrated
+    hoisted = affinity._hoist_dimensions_for_toml(migrated)
+    assert hoisted["dimensions"] == [{"key": "a", "label": "甲"}]
+    assert "dimensions" not in hoisted.get("general", {})
+    print("ok: dimensions migrate between root TOML and general model")
+
+
 def test_resolve_dimensions_default() -> None:
     dims = affinity.resolve_dimensions(None)
     keys = [d.key for d in dims]
@@ -357,7 +382,7 @@ def test_helpers() -> None:
     assert entries == [("", "kes")]
     assert affinity.DEFAULT_DESCRIPTION_SIZE_LIMIT == 256
     assert affinity.DEFAULT_IMPRESSION_NOTE_SIZE_LIMIT == 81920
-    assert affinity.DEFAULT_RECENT_MESSAGES_LIMIT == 1024
+    assert affinity.DEFAULT_RECENT_MESSAGES_LIMIT == 512
     assert affinity.DEFAULT_PERSISTENT_IMPRESSION is True
     assert affinity._sniff_image_mime(b"\xff\xd8\xff\xe0") == "image/jpeg"
     print("ok: misc helpers")
@@ -385,6 +410,29 @@ def test_identity_resolution() -> None:
     )
     assert reply_uid == "888"
     print("ok: identity resolution from top-level kwargs / message dict / at / reply")
+
+
+def test_command_admin_permission() -> None:
+    inst = affinity.create_plugin()
+    inst._admin_qq_ids = affinity._parse_admin_qq_ids(["10001", "10002"])
+    inst._refresh_admin_only = True
+    kwargs = {"platform": "qq", "user_id": "10001"}
+    assert inst._refresh_permission_error(kwargs) == ""
+    kwargs = {"platform": "qq", "user_id": "99999"}
+    assert inst._refresh_permission_error(kwargs) == "只有管理员可以使用 /刷新印象 哦。"
+    inst._refresh_admin_only = False
+    assert inst._refresh_permission_error(kwargs) == ""
+    inst._refresh_admin_only = True
+    inst._admin_qq_ids = frozenset()
+    assert "admin_qq_ids" in inst._refresh_permission_error(kwargs)
+    assert affinity._parse_admin_qq_ids([" 123 ", "abc", "456"]) == frozenset({"123", "456"})
+    assert affinity.DEFAULT_COLD_START_TEMPERATURE == 0.3
+    assert affinity.DEFAULT_REFRESH_ADMIN_ONLY is True
+    legacy = {"general": {"commands_admin_only": False}}
+    migrated = affinity._migrate_config_dict(legacy)
+    assert migrated["general"]["refresh_admin_only"] is False
+    assert "commands_admin_only" not in migrated["general"]
+    print("ok: refresh impression admin permission")
 
 
 def test_select_radar_dimensions() -> None:
@@ -448,6 +496,8 @@ def main() -> None:
     test_plugin_importable()
     test_manifest_capabilities_cover_usage()
     test_config_toml_consistent()
+    test_config_schema_general_section()
+    test_config_dimensions_migration()
     test_resolve_dimensions_default()
     test_effective_helpers()
     test_svg_generation()
@@ -462,6 +512,7 @@ def main() -> None:
     test_resolve_radar_top_n()
     test_select_radar_dimensions()
     test_identity_resolution()
+    test_command_admin_permission()
     test_top_dimensions_selection()
     print("\n全部冒烟测试通过")
 

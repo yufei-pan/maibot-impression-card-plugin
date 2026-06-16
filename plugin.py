@@ -40,7 +40,7 @@ from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.config import validate_plugin_config
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-CURRENT_CONFIG_VERSION = "0.2.1"
+CURRENT_CONFIG_VERSION = "0.2.2"
 SHIPPED_CONFIG_TEMPLATE_NAME = "config.default.toml"
 _PLUGIN_ROOT = Path(__file__).resolve().parent
 _CARD_FONT_FILES = (
@@ -77,7 +77,9 @@ DEFAULT_SCALE_MIN = 0.0
 DEFAULT_TOTAL_LABEL = "好感度"
 DEFAULT_ALLOW_QUERY_OTHERS = True
 DEFAULT_PRUNE_REMOVED_DIMENSIONS = False
-DEFAULT_RECENT_MESSAGES_LIMIT = 1024
+DEFAULT_RECENT_MESSAGES_LIMIT = 512
+DEFAULT_ADMIN_QQ_IDS: list[str] = []
+DEFAULT_REFRESH_ADMIN_ONLY = True
 DEFAULT_RADAR_TOP_N = 5
 DEFAULT_STORE_PATH = "data/affinity.sqlite3"
 
@@ -153,7 +155,7 @@ DEFAULT_COMPACT_PROMPT_TEMPLATE = """你是{nickname}。
 
 # 冷启动 / 刷新印象。
 DEFAULT_COLD_START_MODEL = "planner"
-DEFAULT_COLD_START_TEMPERATURE = 0.75
+DEFAULT_COLD_START_TEMPERATURE = 0.3
 DEFAULT_COLD_START_MAX_TOKENS = 0
 
 DEFAULT_COLD_START_PROMPT_TEMPLATE = """你是{nickname}。
@@ -165,7 +167,7 @@ DEFAULT_COLD_START_PROMPT_TEMPLATE = """你是{nickname}。
 评分维度（每项参考 {scale_min}–{scale_max}，{default_score} 为中间值；分数越高表示你越认可该项；加分=奖励、扣分=不满。各维度均为正向表述，允许极端越界）：
 {dimensions_doc}
 
-同时给一个「{total_label}」总分（同样以 {scale_min}–{scale_max} 为参考，可越界）。
+另外单独给一个「{total_label}」整体评分（同样以 {scale_min}–{scale_max} 为参考，可越界）。它是你对 ta 的整体感受，是一个独立的评分，**不是**上面各维度的总和或平均，请单独判断。
 
 关于这个人你已知的信息：
 {person_identities}
@@ -423,10 +425,11 @@ def _score_guidance_text(
     scale_max: float = DEFAULT_SCALE_MAX,
 ) -> str:
     return (
-        f"各维度与总值的默认中间值是 {_fmt_num(default_score)}；"
+        f"各维度与好感度本身的默认中间值都是 {_fmt_num(default_score)}；"
         f"虽无硬性上下限，但一般会在 {_fmt_scale_range(scale_min, scale_max)} 之间浮动，"
         f"少数情况可故意越界以达成夸张效果。"
         "所有子项均为「越高越好」的正向表述：加分表示认可，扣分表示不满。"
+        "好感度是一个独立的整体评分，并非各维度之和或平均。"
     )
 
 
@@ -986,7 +989,7 @@ class GeneralSectionConfig(PluginConfigBase):
     total_label: str | None = Field(
         default=None,
         json_schema_extra={"placeholder": DEFAULT_TOTAL_LABEL},
-        description="好感度总值的显示名。",
+        description="好感度整体评分的显示名。",
     )
     default_score: float | None = Field(
         default=None,
@@ -1027,6 +1030,20 @@ class GeneralSectionConfig(PluginConfigBase):
         default=None,
         json_schema_extra={"placeholder": DEFAULT_STORE_PATH},
         description="SQLite 数据文件路径；相对路径基于插件目录解析（跨私聊/群聊共用）。",
+    )
+    admin_qq_ids: list[str] | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": "[]"},
+        description="管理员 QQ 号列表；配合 refresh_admin_only 限制谁可使用 /刷新印象。",
+    )
+    refresh_admin_only: bool | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": "true"},
+        description="是否仅管理员可使用 /刷新印象（默认 true；/卡片 不受限；新用户查卡触发的冷启动也不受限）。",
+    )
+    dimensions: list[DimensionConfig] | None = Field(
+        default=None,
+        description="好感度子项维度列表（可任意多项）；留空使用内置默认集。TOML 中仍可用根级 [[dimensions]]。",
     )
 
 
@@ -1246,10 +1263,47 @@ class AffinityPluginConfig(PluginConfigBase):
     description: DescriptionSectionConfig = Field(default_factory=DescriptionSectionConfig)
     cold_start: ColdStartSectionConfig = Field(default_factory=ColdStartSectionConfig)
     notify: NotifySectionConfig = Field(default_factory=NotifySectionConfig)
-    dimensions: list[DimensionConfig] | None = Field(
-        default=None,
-        description="好感度子项维度列表（可任意多项）；留空使用内置默认集 A·群友养成。",
-    )
+
+
+# --------------------------------------------------------------------------- #
+# 配置落盘辅助（与塑料内存条一致：空壳恢复 + 去 None 持久化）
+# --------------------------------------------------------------------------- #
+def _migrate_config_dict(config: Mapping[str, Any]) -> dict[str, Any]:
+    """迁移旧配置：根级 ``[[dimensions]]``、``commands_admin_only`` → 新字段。"""
+    cfg = dict(config)
+    general = cfg.get("general")
+    if isinstance(general, dict):
+        general = dict(general)
+    else:
+        general = None
+
+    root_dims = cfg.pop("dimensions", None)
+    if root_dims is not None:
+        if general is None:
+            general = {}
+        if general.get("dimensions") is None:
+            general["dimensions"] = root_dims
+
+    if general is not None:
+        if "refresh_admin_only" not in general and "commands_admin_only" in general:
+            general["refresh_admin_only"] = general.pop("commands_admin_only")
+        cfg["general"] = general
+
+    return cfg
+
+
+def _hoist_dimensions_for_toml(config: Mapping[str, Any]) -> dict[str, Any]:
+    """写回 TOML 时把 ``general.dimensions`` 提升为根级 ``[[dimensions]]``。"""
+    result = dict(config)
+    general = result.get("general")
+    if not isinstance(general, dict):
+        return result
+    general = dict(general)
+    dims = general.pop("dimensions", None)
+    result["general"] = general
+    if dims is not None:
+        result["dimensions"] = dims
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -1276,6 +1330,19 @@ def _estr(value: str | None, default: str) -> str:
 
 def _ebool(value: bool | None, default: bool) -> bool:
     return default if value is None else bool(value)
+
+
+def _parse_admin_qq_ids(raw: list[str] | None) -> frozenset[str]:
+    if raw is None:
+        source = DEFAULT_ADMIN_QQ_IDS
+    else:
+        source = raw
+    result: set[str] = set()
+    for item in source:
+        qq = str(item).strip()
+        if qq and _is_qq_user_id(qq):
+            result.add(qq)
+    return frozenset(result)
 
 
 def _etmpl(value: str | None, default: str) -> str:
@@ -1322,9 +1389,6 @@ def resolve_dimensions(raw: Any) -> list[Dimension]:
     return items
 
 
-# --------------------------------------------------------------------------- #
-# 配置落盘辅助（与塑料内存条一致：空壳恢复 + 去 None 持久化）
-# --------------------------------------------------------------------------- #
 def _is_runner_generated_bare_config(config_path: Path) -> bool:
     if not config_path.exists():
         return True
@@ -1375,10 +1439,11 @@ def _strip_none_deep(value: Any) -> Any:
     return value
 
 
-def _dump_config_for_persist(config: dict[str, Any]) -> dict[str, Any]:
-    validated = validate_plugin_config(AffinityPluginConfig, config)
+def _dump_config_for_persist(config: Mapping[str, Any]) -> dict[str, Any]:
+    migrated = _migrate_config_dict(config)
+    validated = validate_plugin_config(AffinityPluginConfig, migrated)
     dumped = validated.model_dump(mode="python", exclude_none=True)
-    return _strip_none_deep(dumped)
+    return _strip_none_deep(_hoist_dimensions_for_toml(dumped))
 
 
 # --------------------------------------------------------------------------- #
@@ -1645,6 +1710,8 @@ class AffinityPlugin(MaiBotPlugin):
         self._recent_messages_limit = DEFAULT_RECENT_MESSAGES_LIMIT
         self._prune_removed = DEFAULT_PRUNE_REMOVED_DIMENSIONS
         self._store_path = DEFAULT_STORE_PATH
+        self._admin_qq_ids = frozenset()
+        self._refresh_admin_only = DEFAULT_REFRESH_ADMIN_ONLY
 
     # ------------------------------------------------------------------ #
     # 生命周期
@@ -1683,9 +1750,27 @@ class AffinityPlugin(MaiBotPlugin):
         self.ctx.logger.info("印象卡片插件配置已更新: version=%s", version)
 
     def normalize_plugin_config(self, config_data: Mapping[str, Any] | None) -> tuple[dict[str, Any], bool]:
-        normalized, changed = super().normalize_plugin_config(config_data)
-        persistable = _dump_config_for_persist(normalized)
-        return persistable, changed or persistable != normalized
+        raw = dict(config_data or {})
+        migrated = _migrate_config_dict(raw)
+        internal, changed = super(AffinityPlugin, self).normalize_plugin_config(migrated)
+        hoisted = _hoist_dimensions_for_toml(internal)
+        return hoisted, changed or migrated != raw or hoisted != internal
+
+    def set_plugin_config(self, config: dict[str, Any]) -> None:
+        migrated = _migrate_config_dict(config)
+        internal, _ = super(AffinityPlugin, self).normalize_plugin_config(migrated)
+        self._plugin_config_data = internal
+
+        config_class = type(self).get_config_model()
+        if config_class is None:
+            self._plugin_config_instance = None
+            return
+
+        try:
+            self._plugin_config_instance = validate_plugin_config(config_class, internal)
+        except Exception as exc:
+            self._plugin_config_instance = None
+            self._get_logger().warning(f"插件配置校验失败，将仅保留原始配置字典: {exc}")
 
     # ------------------------------------------------------------------ #
     # 配置解析
@@ -1693,7 +1778,7 @@ class AffinityPlugin(MaiBotPlugin):
     def _refresh_config(self) -> None:
         cfg = self.config
         g = cfg.general
-        self._dimensions = resolve_dimensions(cfg.dimensions)
+        self._dimensions = resolve_dimensions(g.dimensions)
         self._total_label = _estr(g.total_label, DEFAULT_TOTAL_LABEL)
         self._default_score = _efloat(g.default_score, DEFAULT_SCORE)
         self._scale_max = _efloat(g.scale_max, DEFAULT_SCALE_MAX)
@@ -1703,6 +1788,26 @@ class AffinityPlugin(MaiBotPlugin):
         self._recent_messages_limit = _eint(g.recent_messages_limit, DEFAULT_RECENT_MESSAGES_LIMIT, minimum=0)
         self._prune_removed = _ebool(g.prune_removed_dimensions, DEFAULT_PRUNE_REMOVED_DIMENSIONS)
         self._store_path = _estr(g.store_path, DEFAULT_STORE_PATH)
+        self._admin_qq_ids = _parse_admin_qq_ids(g.admin_qq_ids)
+        self._refresh_admin_only = _ebool(g.refresh_admin_only, DEFAULT_REFRESH_ADMIN_ONLY)
+
+    def _is_admin(self, platform: str, user_id: str) -> bool:
+        if not self._admin_qq_ids:
+            return False
+        if platform.strip().lower() not in QQ_COMPATIBLE_PLATFORMS:
+            return False
+        uid = str(user_id or "").strip()
+        return bool(uid) and _is_qq_user_id(uid) and uid in self._admin_qq_ids
+
+    def _refresh_permission_error(self, kwargs: dict[str, Any]) -> str:
+        if not self._refresh_admin_only:
+            return ""
+        platform, user_id, _ = _caller_identity(kwargs)
+        if self._is_admin(platform, user_id):
+            return ""
+        if not self._admin_qq_ids:
+            return "刷新印象已限制为仅管理员可用，但尚未配置 admin_qq_ids。"
+        return "只有管理员可以使用 /刷新印象 哦。"
 
     def _resolve_store_path(self) -> Path:
         candidate = Path(self._store_path).expanduser()
@@ -1977,7 +2082,7 @@ class AffinityPlugin(MaiBotPlugin):
             "给某个人的好感度或某个子项维度加分 / 减分（delta 可为负）。"
             "这是一个欢乐向的设定，可凭你的主观态度调整。"
             "target 传对方的 QQ 号（user_id）或名字；不传则默认当前发言者。"
-            "dimension 传 'total'（好感度总值）或某个维度 key；不传默认 total。"
+            "dimension 传 'total'（好感度整体评分，独立于各维度）或某个维度 key；不传默认 total。"
             f"{_SCORE_GUIDANCE_FOR_TOOLS} "
             "调整后会按配置以【系统通知】播报，并返回该项的新数值。"
         ),
@@ -2317,7 +2422,7 @@ class AffinityPlugin(MaiBotPlugin):
     @Tool(
         "get_impression_detail",
         description=(
-            "以 Markdown 形式获取某个人的好感度详细信息（总值、各维度分值、简介）。"
+            "以 Markdown 形式获取某个人的好感度详细信息（好感度整体评分、各维度分值、简介）。"
             f"target 规则同 adjust_score。{_SCORE_GUIDANCE_FOR_TOOLS} "
             "库中没有该人时会先冷启动生成。"
         ),
@@ -2331,7 +2436,7 @@ class AffinityPlugin(MaiBotPlugin):
             return {"content": error or "解析对象失败。"}
         stream_id = _resolve_stream_id(kwargs)
         record = await self._load_or_create(ref, stream_id)
-        return {"content": self._render_detail_markdown(ref, record)}
+        return {"content": self._render_detail_markdown(ref, record, scale_note=True)}
 
     @Tool(
         "refresh_impression",
@@ -2350,7 +2455,10 @@ class AffinityPlugin(MaiBotPlugin):
             return {"content": error or "解析对象失败。"}
         stream_id = _resolve_stream_id(kwargs)
         record = await self._refresh_record(ref, stream_id)
-        return {"content": f"已刷新对 {ref.display_name} 的印象。\n\n" + self._render_detail_markdown(ref, record)}
+        return {
+            "content": f"已刷新对 {ref.display_name} 的印象。\n\n"
+            + self._render_detail_markdown(ref, record, scale_note=True)
+        }
 
     @Tool(
         "send_impression_card",
@@ -2411,33 +2519,75 @@ class AffinityPlugin(MaiBotPlugin):
         action = "已刷新并发送" if refresh_first else "已发送"
         return {"content": f"{action} {ref.display_name} 的印象卡片。"}
 
-    def _render_detail_markdown(self, ref: PersonRef, record: AffinityRecord) -> str:
-        lines = [f"## {ref.display_name} 的好感度档案"]
+    def _scale_context_line(self) -> str:
+        """供 LLM 参考的评分尺度说明：默认中间值与常见区间。"""
+        return (
+            f"评分尺度：默认中间值 {_fmt_num(self._default_score)}，"
+            f"常见区间 {_fmt_scale_range(self._scale_min, self._scale_max)}"
+            "（无硬性上下限，可越界）；每项都是越高越正向。"
+        )
+
+    def _render_detail_markdown(
+        self,
+        ref: PersonRef,
+        record: AffinityRecord,
+        *,
+        dims: Optional[list[tuple[str, float]]] = None,
+        scale_note: bool = False,
+    ) -> str:
+        """渲染好感度档案 Markdown。
+
+        dims 为 None 时列出全部维度；传入 (label, value) 列表则只列出这些维度
+        （用于让文字与卡片雷达图展示的维度保持一致）。
+        scale_note=True 时附上评分尺度说明，给 LLM 提供量纲上下文。
+        """
+        lines = [f"## {ref.display_name} 的{self._total_label}档案"]
         if ref.user_nickname and ref.user_nickname != ref.display_name:
             lines.append(f"- QQ 昵称：{ref.user_nickname}")
         if ref.person_name:
             lines.append(f"- 别名：{ref.person_name}")
         if ref.group_cardnames:
-            lines.append(f"- 别名：{ref.group_cardname}")
-        lines.append(f"- **{self._total_label}（总值）：{_fmt_num(record.total)}**")
+            lines.append(f"- 群名片：{ref.group_cardname}")
+        lines.append(
+            f"- **{self._total_label}：{_fmt_num(record.total)}**"
+            f"（{self._total_label}是独立的整体评分，并非下列维度之和或平均）"
+        )
+        if scale_note:
+            lines.append(f"- {self._scale_context_line()}")
         lines.append("")
-        lines.append("| 维度 | 数值 |")
+        if dims is None:
+            rows = [(d.label, self._get_score(record, d.key)) for d in self._dimensions]
+            header = "| 维度 | 数值 |"
+        else:
+            rows = dims
+            header = "| 维度（雷达图所示） | 数值 |"
+        lines.append(header)
         lines.append("| --- | --- |")
-        for dim in self._dimensions:
-            lines.append(f"| {dim.label} | {_fmt_num(self._get_score(record, dim.key))} |")
+        for label, value in rows:
+            lines.append(f"| {label} | {_fmt_num(value)} |")
         lines.append("")
         lines.append("**印象简介：**")
         lines.append(record.description.strip() or "（暂无）")
         return "\n".join(lines)
 
-    async def _inject_impression_context(self, stream_id: str, ref: PersonRef, record: AffinityRecord) -> None:
-        """向麦麦的 Maisaka 上下文注入刚发送的印象卡片 Markdown 摘要。"""
+    async def _inject_impression_context(
+        self,
+        stream_id: str,
+        ref: PersonRef,
+        record: AffinityRecord,
+        radar_dims: list[tuple[str, float]],
+    ) -> None:
+        """向麦麦的 Maisaka 上下文注入刚发送的印象卡片 Markdown 摘要。
+
+        只列出卡片雷达图实际展示的维度，与图保持一致；并附评分尺度说明。
+        这只是背景信息，不需要刻意提起。
+        """
         if not stream_id:
             return
-        markdown = self._render_detail_markdown(ref, record)
+        markdown = self._render_detail_markdown(ref, record, dims=radar_dims, scale_note=True)
         body = (
             f"[系统·印象卡片] 你刚刚向用户发送了关于「{ref.display_name}」的印象卡片，"
-            "以下为卡片中的分值与简介（供你后续对话参考）：\n\n"
+            "以下为卡片中的分值与简介，仅作背景信息留存、无需特意提起，对方主动问及时再参考：\n\n"
             f"{markdown}"
         )
         try:
@@ -2501,6 +2651,11 @@ class AffinityPlugin(MaiBotPlugin):
     )
     async def cmd_refresh(self, **kwargs: Any) -> tuple[bool, str, int]:
         stream_id = _resolve_stream_id(kwargs)
+        perm_error = self._refresh_permission_error(kwargs)
+        if perm_error:
+            if stream_id:
+                await self.ctx.send.text(perm_error, stream_id)
+            return False, perm_error, 2
         query_kwargs, radar_top_n_spec = self._card_kwargs_with_radar_top_n(kwargs)
         ref, error = await self._resolve_query_target(query_kwargs)
         if error or ref is None:
@@ -2761,10 +2916,10 @@ class AffinityPlugin(MaiBotPlugin):
         if not base_png:
             await self.ctx.send.text(
                 "（图片渲染暂不可用，先用文字版档案。Host 浏览器环境就绪后即可出图。）\n\n"
-                + self._render_detail_markdown(ref, record),
+                + self._render_detail_markdown(ref, record, dims=radar_dims, scale_note=True),
                 stream_id,
             )
-            await self._inject_impression_context(stream_id, ref, record)
+            await self._inject_impression_context(stream_id, ref, record, radar_dims)
             return None
 
         bg = _estr(img_cfg.background_color, DEFAULT_BACKGROUND_COLOR)
@@ -2795,7 +2950,7 @@ class AffinityPlugin(MaiBotPlugin):
             await self.ctx.send.emoji(out_b64, stream_id)
         else:
             await self.ctx.send.image(out_b64, stream_id)
-        await self._inject_impression_context(stream_id, ref, record)
+        await self._inject_impression_context(stream_id, ref, record, radar_dims)
         return None
 
     def _card_kwargs_with_radar_top_n(self, kwargs: dict[str, Any]) -> tuple[dict[str, Any], str]:
