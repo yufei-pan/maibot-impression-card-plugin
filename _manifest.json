@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "com.0-hz.impression-card",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "name": "印象卡片 (Impression Card)",
   "description": "为麦麦引入一套欢乐向的好感度 / 印象系统：群友可用 /卡片 查询自己（或他人）的印象卡（顶部 title bar 含头像/昵称/别名与好感度数字，下方横向 0-10 好感量表条可双向越界，主区域左侧多维属性雷达、右侧人物印象笔记）。麦麦可通过工具给某人某项加减分并以【系统通知】RPG 风格播报，也可调用 send_impression_card 主动发送印象卡；维度任意多项（默认 22 项），卡面只显示最极端 5 项；数值无上下限（顶出/凹陷更好玩）。图片支持 webp/动图/apng/png/gif/jpg 多格式，动图首帧即完整信息。数据本地存储、跨私聊/群聊共用。新用户结合 PersonInfo 印象与最近聊天由 LLM 冷启动生成。",
   "author": {

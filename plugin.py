@@ -1609,6 +1609,22 @@ class PersonRef:
         return "、".join(self.group_cardnames) if self.group_cardnames else ""
 
 
+def _coalesce_text(primary: str, kwargs: dict[str, Any], *aliases: str) -> str:
+    """取正文：优先用显式参数；为空时回退到 kwargs 里常见的同义键。
+
+    麦麦常凭工具名臆测参数名（如对简介工具传 impression/description 而非 content），
+    这里做输入归一化，让这类调用也能正确写入。注意：这不是兜底——若各处都为空，
+    返回空串交由调用方显式报错，绝不静默覆盖 / 清空简介。
+    """
+    if str(primary or "").strip():
+        return str(primary)
+    for alias in aliases:
+        value = kwargs.get(alias, "")
+        if str(value or "").strip():
+            return str(value)
+    return str(primary or "")
+
+
 def _resolve_stream_id(kwargs: dict[str, Any]) -> str:
     """解析当前聊天流 ID。
 
@@ -1749,28 +1765,60 @@ class AffinityPlugin(MaiBotPlugin):
             self._store = AffinityStore(new_path)
         self.ctx.logger.info("印象卡片插件配置已更新: version=%s", version)
 
+    def get_components(self) -> list[dict[str, Any]]:
+        """收集组件声明，并把「可调维度清单」动态注入打分工具。
+
+        ``@Tool`` 装饰器在导入期就把描述与参数定下来了，看不到运行期由
+        config 解析出的维度集；而组件注册（本方法）发生在 on_load 之前、
+        但插件配置已在注册前注入。因此这里先按当前配置刷新派生维度，再把
+        当前可调维度清单写进 adjust_score / set_score 的描述与 dimension
+        参数枚举，让规划器（planner）知道除 total 外还能调整哪些子项维度。
+        """
+        if self._plugin_config_instance is not None:
+            self._refresh_config()
+        components = super().get_components()
+        self._inject_dimension_catalog(components)
+        return components
+
+    def _dimension_catalog_text(self) -> str:
+        """构造给规划器看的「可调维度」清单：total 与各子项 key（label）。"""
+        parts = [f"total（{self._total_label}）"]
+        parts.extend(f"{d.key}（{d.label}）" for d in self._dimensions)
+        return "、".join(parts)
+
+    def _dimension_enum_values(self) -> list[str]:
+        """dimension 参数的合法取值：total 与各维度 key。"""
+        return ["total", *(d.key for d in self._dimensions)]
+
+    def _inject_dimension_catalog(self, components: list[dict[str, Any]]) -> None:
+        """把当前可调维度清单写进打分工具的描述与 dimension 参数枚举。"""
+        catalog = self._dimension_catalog_text()
+        enum_values = self._dimension_enum_values()
+        # 规划器实际读取的是 description（detailed_description 已被 Host 弃用），
+        # 同时 dimension 参数的 enum 会进入发给 LLM 的工具 schema，双重约束。
+        note = f" 【可调维度】dimension 取以下之一（传 key，省略=total）：{catalog}。"
+        for component in components:
+            if component.get("name") not in ("adjust_score", "set_score"):
+                continue
+            metadata = component.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            description = str(metadata.get("description", "") or "")
+            metadata["description"] = f"{description}{note}".strip()
+            metadata["brief_description"] = metadata["description"]
+            for parameter in metadata.get("parameters", []):
+                if not isinstance(parameter, dict) or parameter.get("name") != "dimension":
+                    continue
+                parameter["enum_values"] = list(enum_values)
+                param_desc = str(parameter.get("description", "") or "")
+                parameter["description"] = f"{param_desc}；可选：{catalog}"
+
     def normalize_plugin_config(self, config_data: Mapping[str, Any] | None) -> tuple[dict[str, Any], bool]:
         raw = dict(config_data or {})
         migrated = _migrate_config_dict(raw)
         internal, changed = super(AffinityPlugin, self).normalize_plugin_config(migrated)
-        hoisted = _hoist_dimensions_for_toml(internal)
-        return hoisted, changed or migrated != raw or hoisted != internal
-
-    def set_plugin_config(self, config: dict[str, Any]) -> None:
-        migrated = _migrate_config_dict(config)
-        internal, _ = super(AffinityPlugin, self).normalize_plugin_config(migrated)
-        self._plugin_config_data = internal
-
-        config_class = type(self).get_config_model()
-        if config_class is None:
-            self._plugin_config_instance = None
-            return
-
-        try:
-            self._plugin_config_instance = validate_plugin_config(config_class, internal)
-        except Exception as exc:
-            self._plugin_config_instance = None
-            self._get_logger().warning(f"插件配置校验失败，将仅保留原始配置字典: {exc}")
+        persistable = _dump_config_for_persist(internal)
+        return persistable, changed or migrated != raw or persistable != internal
 
     # ------------------------------------------------------------------ #
     # 配置解析
@@ -2268,6 +2316,7 @@ class AffinityPlugin(MaiBotPlugin):
         ],
     )
     async def append_impression(self, content: str, target: str = "", **kwargs: Any) -> dict[str, str]:
+        content = _coalesce_text(content, kwargs, "impression", "description", "text", "note", "body")
         ref, error = await self._resolve_target(target, kwargs)
         if error or ref is None:
             return {"content": error or "解析对象失败。"}
@@ -2286,12 +2335,16 @@ class AffinityPlugin(MaiBotPlugin):
         ],
     )
     async def rewrite_impression(self, content: str, target: str = "", **kwargs: Any) -> dict[str, str]:
+        content = _coalesce_text(content, kwargs, "impression", "description", "text", "note", "body")
         ref, error = await self._resolve_target(target, kwargs)
         if error or ref is None:
             return {"content": error or "解析对象失败。"}
         return await self._write_description(ref, content, mode="rewrite")
 
     async def _write_description(self, ref: PersonRef, content: str, *, mode: str) -> dict[str, str]:
+        if not str(content or "").strip():
+            action = "追加到" if mode == "append" else "覆盖"
+            return {"content": f"简介内容为空，未{action} {ref.display_name} 的人物印象（原内容已保留）。请把简介文字放进 content 参数后重试。"}
         assert self._store is not None
         desc_cfg = self.config.description
         size_limit = _eint(desc_cfg.size_limit, DEFAULT_DESCRIPTION_SIZE_LIMIT, minimum=1)

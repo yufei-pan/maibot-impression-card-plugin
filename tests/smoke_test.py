@@ -108,6 +108,14 @@ def test_config_dimensions_migration() -> None:
     print("ok: dimensions migrate between root TOML and general model")
 
 
+def test_none_values_never_persisted() -> None:
+    """模型默认 None 不得出现在落盘字典中（tomlkit / WebUI 切换启用状态无法序列化 None）。"""
+    inst = affinity.create_plugin()
+    normalized, _ = inst.normalize_plugin_config({})
+    assert all(value is not None for value in _flatten_values(normalized))
+    print("ok: empty input normalizes without None for persist")
+
+
 def test_resolve_dimensions_default() -> None:
     dims = affinity.resolve_dimensions(None)
     keys = [d.key for d in dims]
@@ -492,12 +500,42 @@ def test_top_dimensions_selection() -> None:
     print("ok: top dimension selection picks highest and lowest negative")
 
 
+def test_impression_feedback() -> None:
+    """简介写入：空内容不得静默覆盖/清空，且容忍 impression/text 别名。"""
+    import asyncio
+    import tempfile
+
+    inst = affinity.AffinityPlugin()
+    inst.set_plugin_config(affinity.AffinityPlugin.build_default_config())
+    tmp = Path(tempfile.mkdtemp(prefix="ic-smoke-"))
+    inst._store = affinity.AffinityStore(tmp / "a.db")
+    ref = affinity.PersonRef(person_id="p1", platform="qq", user_id="123", person_name="测试君")
+    rec = inst._new_record(ref)
+    rec.description = "原有的重要印象"
+    asyncio.run(inst._store.upsert(rec))
+
+    # 空 rewrite 必须被拒绝且不清空
+    asyncio.run(inst._write_description(ref, "   ", mode="rewrite"))
+    assert asyncio.run(inst._store.get("p1")).description == "原有的重要印象", "空 rewrite 不得清空简介"
+    # 真实 rewrite 仍可写入
+    asyncio.run(inst._write_description(ref, "全新的简介", mode="rewrite"))
+    assert asyncio.run(inst._store.get("p1")).description == "全新的简介"
+    # 空 append 必须被拒绝
+    asyncio.run(inst._write_description(ref, "", mode="append"))
+    assert asyncio.run(inst._store.get("p1")).description == "全新的简介", "空 append 不应改动简介"
+    # 别名归一化
+    assert affinity._coalesce_text("", {"impression": "x"}, "impression") == "x"
+    assert affinity._coalesce_text("p", {"impression": "x"}, "impression") == "p"
+
+
 def main() -> None:
     test_plugin_importable()
+    test_impression_feedback()
     test_manifest_capabilities_cover_usage()
     test_config_toml_consistent()
     test_config_schema_general_section()
     test_config_dimensions_migration()
+    test_none_values_never_persisted()
     test_resolve_dimensions_default()
     test_effective_helpers()
     test_svg_generation()
