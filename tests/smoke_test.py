@@ -108,6 +108,24 @@ def test_config_dimensions_migration() -> None:
     print("ok: dimensions migrate between root TOML and general model")
 
 
+
+
+def test_webui_blank_optional_scalars_normalize() -> None:
+    """WebUI 清空 Optional 数值字段会提交空字符串，应视为留空跟随内置默认。"""
+    inst = affinity.create_plugin()
+    normalized, _ = inst.normalize_plugin_config(
+        {
+            "plugin": {"enabled": True, "config_version": affinity.CURRENT_CONFIG_VERSION},
+            "general": {"radar_top_n": "", "default_score": "  ", "allow_query_others": ""},
+            "image": {"jpg_quality": ""},
+        }
+    )
+    assert all(value is not None for value in _flatten_values(normalized))
+    assert "radar_top_n" not in normalized.get("general", {})
+    assert "jpg_quality" not in normalized.get("image", {})
+    print("ok: webui blank optional scalars normalize to defaults")
+
+
 def test_none_values_never_persisted() -> None:
     """模型默认 None 不得出现在落盘字典中（tomlkit / WebUI 切换启用状态无法序列化 None）。"""
     inst = affinity.create_plugin()
@@ -536,6 +554,7 @@ def main() -> None:
     test_config_schema_general_section()
     test_config_dimensions_migration()
     test_none_values_never_persisted()
+    test_webui_blank_optional_scalars_normalize()
     test_resolve_dimensions_default()
     test_effective_helpers()
     test_svg_generation()
