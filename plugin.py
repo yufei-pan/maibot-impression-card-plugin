@@ -142,9 +142,9 @@ DEFAULT_COMPACT_MAX_TOKENS = 0  # 0 = 自动按上限计算
 DEFAULT_MAX_COMPACT_ATTEMPTS = 3
 AUTO_COMPACT_MAX_TOKENS_MULTIPLIER = 8
 
-DEFAULT_COMPACT_PROMPT_TEMPLATE = """你是{nickname}。
-你的人格设定：{personality}
-你的表达风格：{reply_style}
+DEFAULT_COMPACT_PROMPT_TEMPLATE = """你是印象卡片模块，是名为「{nickname}」的人工智能生命体的一部分。
+{nickname}的人格设定：{personality}
+{nickname}的表达风格：{reply_style}
 
 下面这段你对群友「{name}」的印象简介太长了：当前 {used}，必须精简到 {limit_label} 以内。
 请你以{nickname}的身份、用你的口吻重写这段简介，保留最核心的人物特征与你的态度，让它更精炼有趣。
@@ -158,9 +158,9 @@ DEFAULT_COLD_START_MODEL = "planner"
 DEFAULT_COLD_START_TEMPERATURE = 0.3
 DEFAULT_COLD_START_MAX_TOKENS = 0
 
-DEFAULT_COLD_START_PROMPT_TEMPLATE = """你是{nickname}。
-{personality}
-{reply_style}
+DEFAULT_COLD_START_PROMPT_TEMPLATE = """你是印象卡片模块，是名为「{nickname}」的人工智能生命体的一部分。
+{nickname}的人格设定：{personality}
+{nickname}的表达风格：{reply_style}
 
 你要为群友「{name}」{task_intro}一份「好感度档案」。这是一个欢乐向的设定，请完全以你的视角、按你的喜好与脾气来打分，可以主观、可以毒舌、可以偏心，不必客观中立。
 
