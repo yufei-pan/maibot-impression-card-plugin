@@ -41,7 +41,7 @@ from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.config import validate_plugin_config
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-CURRENT_CONFIG_VERSION = "0.2.2"
+CURRENT_CONFIG_VERSION = "0.2.3"
 SHIPPED_CONFIG_TEMPLATE_NAME = "config.default.toml"
 _PLUGIN_ROOT = Path(__file__).resolve().parent
 _CARD_FONT_FILES = (
@@ -79,6 +79,7 @@ DEFAULT_TOTAL_LABEL = "好感度"
 DEFAULT_ALLOW_QUERY_OTHERS = True
 DEFAULT_PRUNE_REMOVED_DIMENSIONS = False
 DEFAULT_RECENT_MESSAGES_LIMIT = 512
+DEFAULT_LLM_RPC_TIMEOUT_MS = 120_000  # llm.generate 的 cap.call RPC 超时（毫秒）；Host 默认仅 30s
 DEFAULT_ADMIN_QQ_IDS: list[str] = []
 DEFAULT_REFRESH_ADMIN_ONLY = True
 DEFAULT_RADAR_TOP_N = 5
@@ -1022,6 +1023,11 @@ class GeneralSectionConfig(PluginConfigBase):
         json_schema_extra={"placeholder": str(DEFAULT_RECENT_MESSAGES_LIMIT)},
         description="冷启动 / 刷新印象时参考的最近聊天条数。",
     )
+    llm_rpc_timeout_ms: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_LLM_RPC_TIMEOUT_MS)},
+        description="本插件所有 llm.generate 调用的 cap.call RPC 超时（毫秒）。冷启动/刷新印象与简介精简共用；留空默认 120000（120 秒）。Host 未指定时默认仅 30 秒。",
+    )
     prune_removed_dimensions: bool | None = Field(
         default=None,
         json_schema_extra={"placeholder": "false"},
@@ -1776,6 +1782,7 @@ class AffinityPlugin(MaiBotPlugin):
         self._allow_query_others = DEFAULT_ALLOW_QUERY_OTHERS
         self._radar_top_n = DEFAULT_RADAR_TOP_N
         self._recent_messages_limit = DEFAULT_RECENT_MESSAGES_LIMIT
+        self._llm_rpc_timeout_ms = DEFAULT_LLM_RPC_TIMEOUT_MS
         self._prune_removed = DEFAULT_PRUNE_REMOVED_DIMENSIONS
         self._store_path = DEFAULT_STORE_PATH
         self._admin_qq_ids = frozenset()
@@ -1887,6 +1894,7 @@ class AffinityPlugin(MaiBotPlugin):
         self._allow_query_others = _ebool(g.allow_query_others, DEFAULT_ALLOW_QUERY_OTHERS)
         self._radar_top_n = _eint(g.radar_top_n, DEFAULT_RADAR_TOP_N, minimum=1)
         self._recent_messages_limit = _eint(g.recent_messages_limit, DEFAULT_RECENT_MESSAGES_LIMIT, minimum=0)
+        self._llm_rpc_timeout_ms = _eint(g.llm_rpc_timeout_ms, DEFAULT_LLM_RPC_TIMEOUT_MS, minimum=1)
         self._prune_removed = _ebool(g.prune_removed_dimensions, DEFAULT_PRUNE_REMOVED_DIMENSIONS)
         self._store_path = _estr(g.store_path, DEFAULT_STORE_PATH)
         self._admin_qq_ids = _parse_admin_qq_ids(g.admin_qq_ids)
@@ -2479,7 +2487,11 @@ class AffinityPlugin(MaiBotPlugin):
                 description=current,
             )
             result = await self.ctx.llm.generate(
-                prompt=prompt, model=model, temperature=temperature, max_tokens=max_tokens
+                prompt=prompt,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout_ms=self._llm_rpc_timeout_ms,
             )
             if not result.get("success"):
                 self.ctx.logger.warning("简介精简第 %d 次 LLM 调用失败: %s", attempt, result.get("error"))
@@ -2883,7 +2895,11 @@ class AffinityPlugin(MaiBotPlugin):
         self._sync_identity(record, ref)
         try:
             result = await self.ctx.llm.generate(
-                prompt=prompt, model=model, temperature=temperature, max_tokens=max_tokens
+                prompt=prompt,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout_ms=self._llm_rpc_timeout_ms,
             )
         except Exception as exc:
             self.ctx.logger.warning("%s LLM 调用异常: %s", "刷新印象" if is_refresh else "冷启动", exc, exc_info=True)

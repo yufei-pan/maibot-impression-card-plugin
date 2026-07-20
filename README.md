@@ -139,6 +139,8 @@
 所有可调项见 `config.default.toml`。除 `[[dimensions]]` 外的字段**留空 / 注释掉即用内置默认**；
 插件升级调整默认时，留空字段会自动跟随新值。
 
+LLM 调用（冷启动 / 刷新印象 / 简介精简）的 `cap.call` RPC 超时由 `[general] llm_rpc_timeout_ms` 控制，默认 **120000**（120 秒）。
+
 ## 安装
 
 1. 把本目录放进（或软链到）`MaiBot/plugins/`。

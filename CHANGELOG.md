@@ -5,6 +5,12 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.2.6] - 2026-07-20
+
+### 新增
+
+- `[general] llm_rpc_timeout_ms`：本插件所有 `llm.generate` 的 cap.call RPC 超时（毫秒），默认 120000（120 秒）；冷启动/刷新印象与简介精简共用
+
 ## [0.2.5] - 2026-07-11
 
 ### 修复

@@ -7,7 +7,7 @@
 # 是否启用插件
 enabled = true
 # 配置版本
-config_version = "0.2.2"
+config_version = "0.2.3"
 
 [general]
 # 好感度整体评分的显示名。
@@ -24,6 +24,9 @@ config_version = "0.2.2"
 # radar_top_n = 5
 # 冷启动 / 刷新印象时参考的最近聊天条数。
 # recent_messages_limit = 512
+# 本插件所有 llm.generate 的 cap.call RPC 超时（毫秒）；冷启动/刷新与简介精简共用。
+# Host 未指定时默认仅 30 秒；留空则用插件默认 120000（120 秒）。
+# llm_rpc_timeout_ms = 120000
 # 从配置删除某维度时，是否同时从数据库清掉该维度的历史分值（默认保留）。
 # prune_removed_dimensions = false
 # SQLite 数据文件路径；相对路径基于插件目录解析（跨私聊/群聊共用一份）。

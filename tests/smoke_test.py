@@ -88,7 +88,7 @@ def test_config_schema_general_section() -> None:
   general = schema["sections"]["general"]
   assert general["title"] == "好感度"
   field_names = set(general["fields"])
-  assert {"admin_qq_ids", "refresh_admin_only", "recent_messages_limit", "dimensions"} <= field_names
+  assert {"admin_qq_ids", "refresh_admin_only", "recent_messages_limit", "llm_rpc_timeout_ms", "dimensions"} <= field_names
   assert "general" not in schema["sections"] or schema["sections"].get("general", {}).get("title") != "通用设置"
   print("ok: WebUI general section exposes affinity settings")
 
