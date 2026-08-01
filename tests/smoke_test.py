@@ -74,13 +74,15 @@ def test_manifest_capabilities_cover_usage() -> None:
 
 def test_config_toml_consistent() -> None:
     default_config = affinity.AffinityPlugin.build_default_config()
-    config_data = tomllib.loads((PLUGIN_DIR / "config.toml").read_text(encoding="utf-8"))
+    shipped = PLUGIN_DIR / "config.default.toml"
+    assert shipped.is_file(), "缺少随仓库分发的 config.default.toml"
+    config_data = tomllib.loads(shipped.read_text(encoding="utf-8"))
     for section, value in config_data.items():
-        assert section in default_config, f"config.toml 中存在未知配置节：{section}"
+        assert section in default_config, f"config.default.toml 中存在未知配置节：{section}"
         if isinstance(value, dict):
             for field_name in value:
                 assert field_name in default_config[section], f"未知字段：{section}.{field_name}"
-    print("ok: config.toml consistent with model")
+    print("ok: config.default.toml consistent with model")
 
 
 def test_config_schema_general_section() -> None:

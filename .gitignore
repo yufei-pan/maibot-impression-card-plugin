@@ -17,3 +17,6 @@ tests/_out/
 .DS_Store
 .idea/
 .vscode/
+
+# 运行期配置（由 Host/WebUI 写回；模板见 config.default.toml）
+config.toml
