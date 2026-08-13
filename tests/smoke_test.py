@@ -577,7 +577,7 @@ def test_light_refresh_and_proactive_config_defaults() -> None:
     inst = affinity.create_plugin()
     inst.set_plugin_config(affinity.AffinityPlugin.build_default_config())
     inst._refresh_config()
-    assert inst._light_refresh_enabled is True
+    assert inst._light_refresh_enabled is False
     assert inst._light_recent_messages_limit == 48
     assert inst._light_recent_hours == 6
     assert inst._light_max_abs_delta == 0.0

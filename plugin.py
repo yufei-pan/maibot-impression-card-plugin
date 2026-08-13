@@ -82,7 +82,7 @@ DEFAULT_RECENT_MESSAGES_LIMIT = 512
 DEFAULT_LLM_RPC_TIMEOUT_MS = 120_000  # llm.generate 的 cap.call RPC 超时（毫秒）；Host 默认仅 30s
 DEFAULT_ADMIN_QQ_IDS: list[str] = []
 DEFAULT_REFRESH_ADMIN_ONLY = True
-DEFAULT_LIGHT_REFRESH_ENABLED = True
+DEFAULT_LIGHT_REFRESH_ENABLED = False
 DEFAULT_LIGHT_RECENT_MESSAGES_LIMIT = 48
 DEFAULT_LIGHT_RECENT_HOURS = 6
 DEFAULT_LIGHT_TEMPERATURE = 0.4
@@ -1362,8 +1362,8 @@ class LightRefreshSectionConfig(PluginConfigBase):
 
     enabled: bool | None = Field(
         default=None,
-        json_schema_extra={"placeholder": "true"},
-        description="查询 /卡片 时是否先用小上下文 LLM 微调分值与简介。关闭则恢复仅渲染已存档案。",
+        json_schema_extra={"placeholder": "false"},
+        description="查询 /卡片 时是否先用小上下文 LLM 微调分值与简介。默认关闭（后台由定期提醒更新）；开启则每次查询都会微调。",
     )
     recent_messages_limit: int | None = Field(
         default=None,
@@ -3836,7 +3836,7 @@ class AffinityPlugin(MaiBotPlugin):
                 "【印象卡片 · 帮助】",
                 "",
                 "命令：",
-                "· /卡片 /印象卡片 /impression_card — 发送印象卡片（省略对象=自己；默认会先小幅微调，可在配置关闭）",
+                "· /卡片 /印象卡片 /impression_card — 发送印象卡片（省略对象=自己；默认可直接渲染，可在配置开启查询时微调）",
                 "· /刷新印象 /refresh_impression — 重算印象后再发卡",
                 "· /印象卡片帮助 /impression_card_help — 显示本帮助",
                 "",

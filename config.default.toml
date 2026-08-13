@@ -143,7 +143,7 @@ config_version = "0.3.0"
 # notify_template = ""
 
 [light_refresh]
-# enabled = true
+# enabled = false
 # recent_messages_limit = 48
 # recent_hours = 6
 # model = ""

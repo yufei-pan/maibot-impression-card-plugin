@@ -5,11 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.3.1] - 2026-08-13
+
+### 变更
+
+- `/卡片` 查询微调改为出厂关闭；后台由 `[proactive]` 定期提醒 + `nudge_impression` 更新。设 `[light_refresh] enabled = true` 可恢复查询时微调
+
 ## [0.3.0] - 2026-08-13
 
 ### 新增
 
-- `/卡片` 默认在渲染前用较小上下文做 LLM 增量微调（可在 `[light_refresh] enabled` 关闭）
+- `/卡片` 可选在渲染前用较小上下文做 LLM 增量微调（`[light_refresh] enabled`，0.3.1 起默认关闭）
 - 工具 `nudge_impression`：同样的增量微调，供规划器在定期提醒时使用
 - `[proactive]`：默认每 6 小时对有过消息的聊天流提醒规划器是否微调印象（默认少说话）
 
