@@ -510,6 +510,56 @@ def _coerce_float(value: Any, default: float) -> float:
         return default
 
 
+def should_light_nudge_on_card(*, enabled: bool, has_record: bool) -> bool:
+    return bool(enabled) and bool(has_record)
+
+
+def should_ignore_nudge_description(
+    *, persistent_impression: bool, description: str, size_limit: int
+) -> bool:
+    if not persistent_impression:
+        return False
+    return len(description) > int(size_limit)
+
+
+def parse_nudge_payload(
+    parsed: Optional[Mapping[str, Any]],
+    *,
+    allowed_keys: frozenset[str],
+    max_abs_delta: float,
+) -> tuple[dict[str, float], Optional[str]]:
+    if not isinstance(parsed, Mapping):
+        return {}, None
+    raw_deltas = parsed.get("deltas")
+    deltas: dict[str, float] = {}
+    if isinstance(raw_deltas, Mapping):
+        for key, value in raw_deltas.items():
+            name = str(key).strip()
+            if name not in allowed_keys:
+                continue
+            if not _is_number(value):
+                try:
+                    num = float(value)
+                except (TypeError, ValueError):
+                    continue
+            else:
+                num = float(value)
+            if max_abs_delta > 0:
+                limit = float(max_abs_delta)
+                num = max(-limit, min(limit, num))
+            if num == 0:
+                continue
+            deltas[name] = num
+    description_raw = parsed.get("description")
+    description: Optional[str]
+    if description_raw is None:
+        description = None
+    else:
+        text = str(description_raw).strip()
+        description = text or None
+    return deltas, description
+
+
 _RADAR_TOP_N_PATTERN = re.compile(
     r"(?:^|\s)(?:雷达|radar|top_n|雷达数|雷达维度)[:：]\s*(?P<spec>\d+)\s*$",
     re.IGNORECASE,
@@ -3381,6 +3431,31 @@ def _now() -> float:
     import time
 
     return time.time()
+
+
+def apply_nudge_to_record(
+    record: AffinityRecord,
+    deltas: Mapping[str, float],
+    new_description: Optional[str],
+    *,
+    ignore_description: bool,
+    default_score: float,
+) -> tuple[AffinityRecord, list[tuple[str, float]], bool]:
+    applied: list[tuple[str, float]] = []
+    for key, delta in deltas.items():
+        if key == "total":
+            record.total = float(record.total) + float(delta)
+        else:
+            old = float(record.scores.get(key, default_score))
+            record.scores[key] = old + float(delta)
+        applied.append((key, float(delta)))
+    note_changed = False
+    if new_description and not ignore_description:
+        record.description = new_description
+        note_changed = True
+    if applied or note_changed:
+        record.updated_at = _now()
+    return record, applied, note_changed
 
 
 def _sniff_image_mime(data: bytes) -> str:

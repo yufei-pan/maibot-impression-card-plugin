@@ -590,6 +590,85 @@ def test_light_refresh_and_proactive_config_defaults() -> None:
     print("ok: light_refresh / proactive config defaults")
 
 
+def test_should_light_nudge_on_card() -> None:
+    assert affinity.should_light_nudge_on_card(enabled=True, has_record=True) is True
+    assert affinity.should_light_nudge_on_card(enabled=True, has_record=False) is False
+    assert affinity.should_light_nudge_on_card(enabled=False, has_record=True) is False
+    print("ok: should_light_nudge_on_card")
+
+
+def test_parse_and_apply_nudge_payload() -> None:
+    allowed = frozenset({"total", "joy", "trust"})
+    rec = affinity.AffinityRecord(
+        person_id="p1",
+        total=5.0,
+        scores={"joy": 5.0, "trust": 5.0},
+        description="旧简介",
+    )
+    parsed = {"deltas": {"total": 0.3, "joy": -0.2, "nope": 9, "trust": "x"}, "description": "新简介"}
+    deltas, desc = affinity.parse_nudge_payload(parsed, allowed_keys=allowed, max_abs_delta=0.0)
+    assert deltas["total"] == 0.3
+    assert deltas["joy"] == -0.2
+    assert "nope" not in deltas
+    assert "trust" not in deltas  # non-numeric ignored
+    assert desc == "新简介"
+    rec2, applied, note_changed = affinity.apply_nudge_to_record(
+        rec, deltas, desc, ignore_description=False, default_score=5.0
+    )
+    assert rec2.total == 5.3
+    assert rec2.scores["joy"] == 4.8
+    assert rec2.scores["trust"] == 5.0
+    assert rec2.description == "新简介"
+    assert note_changed is True
+    assert ("total", 0.3) in applied and ("joy", -0.2) in applied
+
+    none_d, none_desc = affinity.parse_nudge_payload(None, allowed_keys=allowed, max_abs_delta=0.0)
+    assert none_d == {} and none_desc is None
+    # apply_nudge_to_record 就地改记录；空操作断言必须用一份未改过的档案。
+    rec_noop = affinity.AffinityRecord(
+        person_id="p1",
+        total=5.0,
+        scores={"joy": 5.0, "trust": 5.0},
+        description="旧简介",
+    )
+    rec3, applied3, note3 = affinity.apply_nudge_to_record(
+        rec_noop, {}, None, ignore_description=False, default_score=5.0
+    )
+    assert rec3.total == 5.0 and rec3.description == "旧简介" and applied3 == [] and note3 is False
+    print("ok: parse/apply nudge")
+
+
+def test_nudge_max_abs_delta_and_long_note_guard() -> None:
+    allowed = frozenset({"total"})
+    deltas, _ = affinity.parse_nudge_payload(
+        {"deltas": {"total": 9.0}}, allowed_keys=allowed, max_abs_delta=2.0
+    )
+    assert deltas["total"] == 2.0
+    deltas0, _ = affinity.parse_nudge_payload(
+        {"deltas": {"total": 9.0}}, allowed_keys=allowed, max_abs_delta=0.0
+    )
+    assert deltas0["total"] == 9.0
+    short = "短"
+    long = "x" * 300
+    assert affinity.should_ignore_nudge_description(
+        persistent_impression=True, description=long, size_limit=256
+    ) is True
+    assert affinity.should_ignore_nudge_description(
+        persistent_impression=True, description=short, size_limit=256
+    ) is False
+    assert affinity.should_ignore_nudge_description(
+        persistent_impression=False, description=long, size_limit=256
+    ) is False
+    rec = affinity.AffinityRecord(person_id="p", total=1.0, scores={}, description=long)
+    rec2, _, note_changed = affinity.apply_nudge_to_record(
+        rec, {"total": 1.0}, "会被忽略", ignore_description=True, default_score=5.0
+    )
+    assert rec2.total == 2.0
+    assert rec2.description == long
+    assert note_changed is False
+    print("ok: max_abs_delta and long-note guard")
+
+
 def main() -> None:
     test_plugin_importable()
     test_impression_feedback()
@@ -617,6 +696,9 @@ def main() -> None:
     test_top_dimensions_selection()
     test_config_version_0_3_0()
     test_light_refresh_and_proactive_config_defaults()
+    test_should_light_nudge_on_card()
+    test_parse_and_apply_nudge_payload()
+    test_nudge_max_abs_delta_and_long_note_guard()
     print("\n全部冒烟测试通过")
 
 
