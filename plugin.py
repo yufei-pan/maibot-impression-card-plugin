@@ -197,6 +197,32 @@ DEFAULT_COLD_START_PROMPT_TEMPLATE = """你是印象卡片模块，是名为「{
 
 DEFAULT_REFRESH_GUIDANCE = """【刷新评估】这是一次全面重算，不是微调旧分。请优先依据「印象记忆」与「最近聊天记录」重新判断你对 ta 的真实感受；下方旧档案仅供参考，各项分数与简介都可以明显上升或下降，不要惯性膨胀，也不要死守先入为主的旧印象。"""
 
+DEFAULT_LIGHT_REFRESH_PROMPT_TEMPLATE = """你是印象卡片模块，是名为「{nickname}」的人工智能生命体的一部分。
+{nickname}的人格设定：{personality}
+{nickname}的表达风格：{reply_style}
+
+这是一次**小幅微调**，不是全面重算。请根据「最近聊天」对群友「{name}」的已有档案做增量调整。
+不要给出全新绝对分数；只输出相对变化。没有变化的维度请省略。可以主观、可以毒舌，但优先小步调整。
+
+评分参考区间 {scale_min}–{scale_max}，中间值 {default_score}；实际可越界。各维度均为正向表述。
+「{total_label}」是独立的整体评分，不是各维度之和。
+{dimensions_doc}
+
+当前档案（这是基准，请在此上加减）：
+{current_scores_block}
+当前印象笔记：
+{current_note}
+{note_policy}
+关于这个人：
+{person_identities}
+最近的聊天记录（当前会话、较短窗口）：
+  - quote 后是消息 id。请辨别不同用户；{nickname} 也是参与者。
+{recent_chat}
+
+请只输出一个 JSON 对象（不要额外文字或代码块标记）：
+{{"deltas": {{"total": 数字, "维度key": 数字}}, "description": "可选；省略或空字符串表示保留原笔记。若要改笔记，请在原文基础上微调，不要另起炉灶。{size_limit}字以内"}}
+deltas 里只放需要改的 key（含 total）。"""
+
 # 从 A_Memorix（经 knowledge.search）拉取长期记忆时的默认上限。
 DEFAULT_MEMORY_SEARCH_LIMIT = 50
 DEFAULT_MEMORY_MAX_ITEMS = 200
@@ -1682,6 +1708,16 @@ class AffinityRecord:
     updated_at: float = 0.0
 
 
+@dataclass
+class NudgeOutcome:
+    record: Optional[AffinityRecord]
+    applied: list[tuple[str, float]]
+    note_changed: bool
+    error: str = ""
+    missing: bool = False
+    failed: bool = False
+
+
 class AffinityStore:
     """好感度数据的 SQLite 封装。
 
@@ -2752,6 +2788,7 @@ class AffinityPlugin(MaiBotPlugin):
     @Tool(
         "refresh_impression",
         description=(
+            "小幅更新请优先用 nudge_impression；本工具是结合长期记忆的全面重算。"
             "结合 PersonInfo 印象记忆、最近聊天与既有数据，用你的口吻重新评估某个人的"
             f"好感度各项分值与简介（既有数据会作为参考一并更新）。target 规则同 adjust_score。"
             f"{_SCORE_GUIDANCE_FOR_TOOLS}"
@@ -2770,6 +2807,40 @@ class AffinityPlugin(MaiBotPlugin):
             "content": f"已刷新对 {ref.display_name} 的印象。\n\n"
             + self._render_detail_markdown(ref, record, scale_note=True)
         }
+
+    @Tool(
+        "nudge_impression",
+        description=(
+            "用较小的近期聊天上下文，对某人已有印象档案做增量微调（deltas，可选微调简介）。"
+            "适合「最近有点变化、但不必全面重算」的场合。没有档案时不要调用（请让用户先 /卡片，或改用 refresh_impression 做冷启动）。"
+            "target 规则同 adjust_score。"
+        ),
+        parameters=[
+            _param("target", ToolParamType.STRING, "对象：QQ号 或 名字；省略=当前发言者", False),
+        ],
+    )
+    async def nudge_impression(self, target: str = "", **kwargs: Any) -> dict[str, str]:
+        ref, error = await self._resolve_target(target, kwargs)
+        if error or ref is None:
+            return {"content": error or "解析对象失败。"}
+        stream_id = _resolve_stream_id(kwargs)
+        outcome = await self._nudge_record(ref, stream_id)
+        if outcome.missing or outcome.record is None:
+            return {"content": outcome.error or "还没有这个人的印象档案。"}
+        if outcome.failed:
+            return {"content": outcome.error or "微调失败，已保留原档案。"}
+        lines = [f"已微调对 {ref.display_name} 的印象。"]
+        if outcome.applied:
+            lines.append("增量：")
+            labels = {"total": self._total_label, **{d.key: d.label for d in self._dimensions}}
+            for key, delta in outcome.applied:
+                lines.append(f"- {labels.get(key, key)}　{_fmt_delta(delta)}")
+        else:
+            lines.append("分值无变化。")
+        lines.append("笔记：" + ("已微调" if outcome.note_changed else "未改"))
+        lines.append("")
+        lines.append(self._render_detail_markdown(ref, outcome.record, scale_note=True))
+        return {"content": "\n".join(lines)}
 
     @Tool(
         "send_impression_card",
@@ -2928,6 +2999,13 @@ class AffinityPlugin(MaiBotPlugin):
                 await self.ctx.send.text(error or "找不到这个人。", stream_id)
             return False, error or "解析对象失败", 2
         try:
+            if self._store is not None:
+                existing = await self._store.get(ref.person_id)
+                if should_light_nudge_on_card(
+                    enabled=self._light_refresh_enabled,
+                    has_record=existing is not None,
+                ):
+                    await self._nudge_record(ref, stream_id)
             radar_error = await self._generate_and_send_card(
                 ref, stream_id, radar_top_n_spec=radar_top_n_spec
             )
@@ -3025,6 +3103,126 @@ class AffinityPlugin(MaiBotPlugin):
         await self._store.upsert(record)
         self._maybe_schedule_storage_compact(ref.person_id, ref.display_name, record.description)
         return record
+
+    async def _nudge_record(self, ref: PersonRef, stream_id: str) -> NudgeOutcome:
+        assert self._store is not None
+        lock = self._gen_locks.setdefault(ref.person_id, asyncio.Lock())
+        async with lock:
+            existing = await self._store.get(ref.person_id)
+            if existing is None:
+                return NudgeOutcome(
+                    record=None,
+                    applied=[],
+                    note_changed=False,
+                    missing=True,
+                    error="还没有这个人的印象档案。",
+                )
+            self._sync_identity(existing, ref)
+            for dim in self._dimensions:
+                existing.scores.setdefault(dim.key, self._default_score)
+
+            score_lines = [f"{self._total_label}: {_fmt_num(existing.total)}"]
+            for dim in self._dimensions:
+                score_lines.append(
+                    f"{dim.label}: {_fmt_num(existing.scores.get(dim.key, self._default_score))}"
+                )
+            current_scores_block = "\n".join(score_lines)
+
+            size_limit = _eint(self.config.description.size_limit, DEFAULT_DESCRIPTION_SIZE_LIMIT, minimum=1)
+            persistent = _ebool(self.config.description.persistent_impression, DEFAULT_PERSISTENT_IMPRESSION)
+            ignore = should_ignore_nudge_description(
+                persistent_impression=persistent,
+                description=existing.description,
+                size_limit=size_limit,
+            )
+            if ignore:
+                note_policy = (
+                    "【笔记策略】当前笔记长于卡面上限，这是持久印象期刊。"
+                    "禁止返回 description（或返回也会被忽略）。只调整 deltas。"
+                )
+                current_note = (existing.description[:size_limit] + "…") if existing.description else "（无）"
+            else:
+                note_policy = "【笔记策略】可以返回微调后的完整笔记，或省略以保留。"
+                current_note = existing.description or "（无）"
+
+            nickname = await self.ctx.config.get("bot.nickname", "麦麦") or "麦麦"
+            personality = await self.ctx.config.get("personality.personality", "") or ""
+            reply_style = await self.ctx.config.get("personality.reply_style", "") or ""
+
+            model = _estr(self.config.light_refresh.model, "") or _estr(
+                self.config.cold_start.model, DEFAULT_COLD_START_MODEL
+            )
+            temperature = _efloat(self.config.light_refresh.temperature, DEFAULT_LIGHT_TEMPERATURE)
+            max_tokens = _eint(self.config.light_refresh.max_tokens, DEFAULT_LIGHT_MAX_TOKENS, minimum=0) or None
+            template = _etmpl(self.config.light_refresh.prompt_template, DEFAULT_LIGHT_REFRESH_PROMPT_TEMPLATE)
+            allowed = frozenset({"total", *(d.key for d in self._dimensions)})
+            dimensions_doc = "\n".join(
+                f"- {d.key}（{d.label}）：{d.description or d.label}" for d in self._dimensions
+            )
+            recent_chat = await self._light_recent_chat_text(stream_id)
+            stored_display_name = str(existing.display_name or "").strip()
+            prompt = _render(
+                template,
+                nickname=nickname,
+                personality=personality,
+                reply_style=reply_style,
+                name=ref.display_name,
+                total_label=self._total_label,
+                scale_min=_fmt_num(self._scale_min),
+                scale_max=_fmt_num(self._scale_max),
+                default_score=_fmt_num(self._default_score),
+                dimensions_doc=dimensions_doc,
+                current_scores_block=current_scores_block,
+                current_note=current_note,
+                note_policy=note_policy,
+                person_identities=_format_person_identities(ref, stored_display_name=stored_display_name),
+                recent_chat=recent_chat or "（无）",
+                size_limit=size_limit,
+            )
+
+            failed = NudgeOutcome(
+                record=existing,
+                applied=[],
+                note_changed=False,
+                failed=True,
+                error="微调印象失败，已保留原档案。",
+            )
+            try:
+                result = await self.ctx.llm.generate(
+                    prompt=prompt,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout_ms=self._llm_rpc_timeout_ms,
+                )
+            except Exception as exc:
+                self.ctx.logger.warning("微调印象 LLM 调用异常: %s", exc, exc_info=True)
+                return failed
+
+            parsed = _extract_json_object(result.get("response", "")) if result.get("success") else None
+            if parsed is None:
+                self.ctx.logger.info(
+                    "微调印象未拿到有效 JSON，已保留原档案 person_id=%s", ref.person_id
+                )
+                return failed
+
+            deltas, desc = parse_nudge_payload(
+                parsed, allowed_keys=allowed, max_abs_delta=self._light_max_abs_delta
+            )
+            existing, applied, note_changed = apply_nudge_to_record(
+                existing,
+                deltas,
+                desc,
+                ignore_description=ignore,
+                default_score=self._default_score,
+            )
+            if applied or note_changed:
+                await self._store.upsert(existing)
+                if note_changed:
+                    self._maybe_schedule_storage_compact(
+                        ref.person_id, ref.display_name, existing.description
+                    )
+            return NudgeOutcome(record=existing, applied=applied, note_changed=note_changed, error="")
 
     async def _generate_record(
         self, ref: PersonRef, stream_id: str, *, existing: Optional[AffinityRecord]
@@ -3164,6 +3362,23 @@ class AffinityPlugin(MaiBotPlugin):
             self.ctx.logger.debug("获取最近聊天失败: %s", exc)
             return ""
 
+    async def _light_recent_chat_text(self, stream_id: str) -> str:
+        if not stream_id or self._light_recent_messages_limit <= 0:
+            return ""
+        try:
+            now = time.time()
+            start = now - self._light_recent_hours * 3600
+            return await self.ctx.message.build_readable(
+                messages=None,
+                chat_id=stream_id,
+                start_time=start,
+                end_time=now,
+                limit=self._light_recent_messages_limit,
+            )
+        except Exception as exc:
+            self.ctx.logger.debug("获取微调用最近聊天失败: %s", exc)
+            return ""
+
     # ------------------------------------------------------------------ #
     # 卡片生成与发送
     # ------------------------------------------------------------------ #
@@ -3298,7 +3513,7 @@ class AffinityPlugin(MaiBotPlugin):
                 "【印象卡片 · 帮助】",
                 "",
                 "命令：",
-                "· /卡片 /印象卡片 /impression_card — 发送印象卡片（省略对象=自己）",
+                "· /卡片 /印象卡片 /impression_card — 发送印象卡片（省略对象=自己；默认会先小幅微调，可在配置关闭）",
                 "· /刷新印象 /refresh_impression — 重算印象后再发卡",
                 "· /印象卡片帮助 /impression_card_help — 显示本帮助",
                 "",
@@ -3309,7 +3524,9 @@ class AffinityPlugin(MaiBotPlugin):
                 "  例：/卡片 @某人 雷达:8",
                 "  例：/impression_card 雷达:3",
                 "",
-                "麦麦工具 send_impression_card：",
+                "麦麦工具：",
+                "· nudge_impression — 用较小近期聊天对已有档案做增量微调（无档案时不要调用）",
+                "· send_impression_card：",
                 "· target — 对象（可省略）",
                 "· refresh_first — 发送前是否刷新",
                 "· radar_top_n — 雷达显示维度数（0=用配置）",

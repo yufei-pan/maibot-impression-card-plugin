@@ -669,6 +669,48 @@ def test_nudge_max_abs_delta_and_long_note_guard() -> None:
     print("ok: max_abs_delta and long-note guard")
 
 
+def test_light_nudge_prompt_placeholders() -> None:
+    tmpl = affinity.DEFAULT_LIGHT_REFRESH_PROMPT_TEMPLATE
+    for key in (
+        "nickname", "personality", "reply_style", "name", "total_label",
+        "scale_min", "scale_max", "default_score", "dimensions_doc",
+        "current_scores_block", "current_note", "note_policy",
+        "person_identities", "recent_chat", "size_limit",
+    ):
+        assert "{" + key + "}" in tmpl, key
+    assert "deltas" in tmpl
+    print("ok: light nudge prompt placeholders")
+
+
+def test_nudge_impression_tool_declared() -> None:
+    inst = affinity.create_plugin()
+    inst.set_plugin_config(inst.build_default_config())
+    names = {c.get("name") for c in inst.get_components()}
+    assert "nudge_impression" in names
+    refresh = next(c for c in inst.get_components() if c.get("name") == "refresh_impression")
+    desc = str((refresh.get("metadata") or {}).get("description") or "")
+    assert "nudge_impression" in desc
+    help_text = inst._impression_help_text()
+    assert "nudge_impression" in help_text
+    print("ok: nudge_impression tool declared")
+
+
+def test_nudge_record_missing_does_not_cold_start() -> None:
+    import asyncio
+    import tempfile
+
+    inst = affinity.create_plugin()
+    inst.set_plugin_config(inst.build_default_config())
+    tmp = Path(tempfile.mkdtemp(prefix="ic-nudge-"))
+    inst._store = affinity.AffinityStore(tmp / "a.db")
+    ref = affinity.PersonRef(person_id="p1", platform="qq", user_id="123", person_name="测试君")
+    outcome = asyncio.run(inst._nudge_record(ref, "s1"))
+    assert outcome.missing is True
+    assert outcome.record is None
+    assert asyncio.run(inst._store.get("p1")) is None
+    print("ok: nudge_record missing does not cold-start")
+
+
 def main() -> None:
     test_plugin_importable()
     test_impression_feedback()
@@ -699,6 +741,9 @@ def main() -> None:
     test_should_light_nudge_on_card()
     test_parse_and_apply_nudge_payload()
     test_nudge_max_abs_delta_and_long_note_guard()
+    test_light_nudge_prompt_placeholders()
+    test_nudge_impression_tool_declared()
+    test_nudge_record_missing_does_not_cold_start()
     print("\n全部冒烟测试通过")
 
 

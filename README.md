@@ -14,6 +14,7 @@
 - **`/卡片`**（别名 `/card`、`/印象卡片`、`/impression_card`）：生成并发送一张印象卡图片。
   - `/卡片` 查自己；`/卡片 @某人`、引用某人后 `/卡片`、或 `/卡片 名字` 查他人（可在配置里关闭查他人）。
   - 可选 **`雷达:N`**（或 `radar:` / `top_n:` / `雷达数:`）指定雷达图显示几个得分最高的维度；省略则用配置 `radar_top_n`（默认 5）。
+  - 默认（`[light_refresh] enabled`，出厂开启）会先用较短窗口的最近聊天做一次 LLM 增量微调（deltas），再渲染已存档案；设 `[light_refresh] enabled = false` 则恢复仅渲染。微调**不会**发【系统通知】；持久印象笔记长于卡面上限时**不会被覆盖**。
   - 卡片布局（T 字型）：**顶部 title bar** = 头像+昵称（左）· 标题（中）· 好感度数字（右）；
     其下一条 **横向好感量表条**（映射 `scale_min`–`scale_max`，可双向越界）；
     **下方主区域** = 左侧多维属性**雷达图**、右侧放大的**印象笔记**。
@@ -27,6 +28,7 @@
   | `append_impression` | 追加人物印象笔记（超长后台 LLM 精简） |
   | `rewrite_impression` | 覆盖人物印象笔记 |
   | `get_impression_detail` | 以 Markdown 返回某人的完整档案 |
+  | `nudge_impression` | 用较小近期聊天对已有档案做增量微调（deltas，可选微调简介）；没有档案时不要调用 |
   | `refresh_impression` | 结合长期记忆 + 最近聊天 + 既有数据重算分值与简介 |
   | `send_impression_card` | 向当前聊天主动发送印象卡片图片（同 `/卡片`；可选 `refresh_first`、`radar_top_n`） |
 
@@ -109,7 +111,7 @@
 - **`refresh_admin_only`（默认 `true`）**：仅管理员可使用 `/刷新印象` 主动重算印象。
 - **`admin_qq_ids`**：管理员 QQ 号列表，例如 `["123456789", "987654321"]`。
 - `/卡片` 不受限；新用户查卡触发的冷启动生成也不受限。
-- 麦麦调用的工具（`refresh_impression`、`send_impression_card` 等）不受此限制。
+- 麦麦调用的工具（`nudge_impression`、`refresh_impression`、`send_impression_card` 等）不受此限制。
 - 设为 `refresh_admin_only = false` 可恢复所有人可用 `/刷新印象`。
 
 > **从 v0.2.1 升级**：v0.2.2 起 `/刷新印象` 默认仅管理员可用。升级后请在 `config.toml` 的 `[general]` 中配置 `admin_qq_ids`（你的 QQ 号），或设 `refresh_admin_only = false` 恢复旧行为；未配置时所有人使用 `/刷新印象` 会收到提示。`/卡片` 与麦麦工具不受影响。
@@ -139,7 +141,7 @@
 所有可调项见 `config.default.toml`。除 `[[dimensions]]` 外的字段**留空 / 注释掉即用内置默认**；
 插件升级调整默认时，留空字段会自动跟随新值。
 
-LLM 调用（冷启动 / 刷新印象 / 简介精简）的 `cap.call` RPC 超时由 `[general] llm_rpc_timeout_ms` 控制，默认 **120000**（120 秒）。
+LLM 调用（冷启动 / 刷新印象 / 查询微调 / 简介精简）的 `cap.call` RPC 超时由 `[general] llm_rpc_timeout_ms` 控制，默认 **120000**（120 秒）。查询微调与冷启动共用该超时，没有单独的 timeout 配置项。
 
 ## 安装
 
