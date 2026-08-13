@@ -28,7 +28,7 @@ import shutil
 import sqlite3
 import tomllib
 from base64 import b64decode, b64encode
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -1749,6 +1749,14 @@ class AffinityStore:
                 )
                 """
             )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS proactive_tick (
+                    stream_id TEXT PRIMARY KEY,
+                    last_fired_at REAL NOT NULL
+                )
+                """
+            )
             self._conn.commit()
         return self._conn
 
@@ -1837,6 +1845,33 @@ class AffinityStore:
     async def upsert(self, record: AffinityRecord) -> None:
         await asyncio.to_thread(self._upsert_sync, record)
 
+    def _get_proactive_last_fired_sync(self, stream_id: str) -> Optional[float]:
+        conn = self._connect()
+        cur = conn.execute(
+            "SELECT last_fired_at FROM proactive_tick WHERE stream_id = ?",
+            (stream_id,),
+        )
+        row = cur.fetchone()
+        return float(row[0]) if row is not None else None
+
+    def _upsert_proactive_last_fired_sync(self, stream_id: str, last_fired_at: float) -> None:
+        conn = self._connect()
+        conn.execute(
+            """
+            INSERT INTO proactive_tick (stream_id, last_fired_at)
+            VALUES (?, ?)
+            ON CONFLICT(stream_id) DO UPDATE SET last_fired_at=excluded.last_fired_at
+            """,
+            (stream_id, float(last_fired_at)),
+        )
+        conn.commit()
+
+    async def get_proactive_last_fired(self, stream_id: str) -> Optional[float]:
+        return await asyncio.to_thread(self._get_proactive_last_fired_sync, stream_id)
+
+    async def upsert_proactive_last_fired(self, stream_id: str, last_fired_at: float) -> None:
+        await asyncio.to_thread(self._upsert_proactive_last_fired_sync, stream_id, last_fired_at)
+
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -1864,6 +1899,92 @@ class PersonRef:
     def group_cardname(self) -> str:
         """全部群名片合并为一行（顿号分隔），供 LLM 提示词等使用。"""
         return "、".join(self.group_cardnames) if self.group_cardnames else ""
+
+
+@dataclass(frozen=True)
+class SpeakerStub:
+    platform: str
+    user_id: str
+    nickname: str
+
+
+@dataclass(frozen=True)
+class BriefingPerson:
+    display_name: str
+    has_card: bool
+    total: Optional[float] = None
+    updated_at: Optional[float] = None
+
+
+def is_proactive_time_due(last_fired_at: Optional[float], now: float, interval_s: float) -> bool:
+    if last_fired_at is None:
+        return False
+    return (now - float(last_fired_at)) >= float(interval_s)
+
+
+def _message_timestamp(msg: Mapping[str, Any]) -> float:
+    try:
+        return float(msg.get("timestamp") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _message_user(msg: Mapping[str, Any]) -> tuple[str, str, str]:
+    info = msg.get("message_info") if isinstance(msg.get("message_info"), Mapping) else {}
+    user = info.get("user_info") if isinstance(info, Mapping) else {}
+    if not isinstance(user, Mapping):
+        user = {}
+    platform = str(msg.get("platform") or "").strip()
+    user_id = str(user.get("user_id") or msg.get("user_id") or "").strip()
+    nickname = str(user.get("user_nickname") or user.get("user_cardname") or user_id).strip()
+    return platform, user_id, nickname
+
+
+def extract_speakers_newest_first(
+    messages: Sequence[Any],
+    *,
+    bot_user_id: str,
+    max_people: int,
+) -> list[SpeakerStub]:
+    rows: list[tuple[float, SpeakerStub]] = []
+    bot = str(bot_user_id or "").strip()
+    for item in messages:
+        if not isinstance(item, Mapping):
+            continue
+        platform, user_id, nickname = _message_user(item)
+        if not user_id or user_id == bot:
+            continue
+        rows.append((_message_timestamp(item), SpeakerStub(platform=platform, user_id=user_id, nickname=nickname or user_id)))
+    rows.sort(key=lambda r: r[0], reverse=True)
+    seen: set[tuple[str, str]] = set()
+    out: list[SpeakerStub] = []
+    for _, speaker in rows:
+        key = (speaker.platform, speaker.user_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(speaker)
+        if len(out) >= max(1, int(max_people)):
+            break
+    return out
+
+
+def format_proactive_briefing(people: Sequence[BriefingPerson], *, total_label: str) -> str:
+    lines = ["【印象卡片 · 定期提醒 · 内部简报】", "以下最近发言者仅供你判断要不要微调印象；不要对用户朗读这份名单。", ""]
+    if not people:
+        lines.append("（最近窗口内没有可列出的发言者）")
+        return "\n".join(lines)
+    for person in people:
+        if person.has_card:
+            total = _fmt_num(person.total) if person.total is not None else "—"
+            when = ""
+            if person.updated_at:
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(person.updated_at))
+                when = f"，上次更新 {when}"
+            lines.append(f"- {person.display_name}：{total_label} {total}{when}")
+        else:
+            lines.append(f"- {person.display_name}：尚无档案")
+    return "\n".join(lines)
 
 
 def _coalesce_text(primary: str, kwargs: dict[str, Any], *aliases: str) -> str:

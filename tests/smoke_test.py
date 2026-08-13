@@ -711,6 +711,58 @@ def test_nudge_record_missing_does_not_cold_start() -> None:
     print("ok: nudge_record missing does not cold-start")
 
 
+def test_proactive_tick_store_and_due() -> None:
+    import asyncio
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="ic-tick-"))
+    store = affinity.AffinityStore(tmp / "a.db")
+    assert asyncio.run(store.get_proactive_last_fired("s1")) is None
+    assert affinity.is_proactive_time_due(None, now=1000.0, interval_s=100.0) is False
+    asyncio.run(store.upsert_proactive_last_fired("s1", 100.0))
+    assert asyncio.run(store.get_proactive_last_fired("s1")) == 100.0
+    assert affinity.is_proactive_time_due(100.0, now=150.0, interval_s=100.0) is False
+    assert affinity.is_proactive_time_due(100.0, now=200.0, interval_s=100.0) is True
+    store.close()
+    print("ok: proactive_tick store")
+
+
+def test_extract_speakers_and_briefing() -> None:
+    messages = [
+        {
+            "timestamp": "100",
+            "platform": "qq",
+            "message_info": {"user_info": {"user_id": "bot", "user_nickname": "麦麦"}},
+        },
+        {
+            "timestamp": "300",
+            "platform": "qq",
+            "message_info": {"user_info": {"user_id": "1", "user_nickname": "甲"}},
+        },
+        {
+            "timestamp": "200",
+            "platform": "qq",
+            "message_info": {"user_info": {"user_id": "2", "user_nickname": "乙"}},
+        },
+        {
+            "timestamp": "400",
+            "platform": "qq",
+            "message_info": {"user_info": {"user_id": "1", "user_nickname": "甲"}},
+        },
+    ]
+    speakers = affinity.extract_speakers_newest_first(messages, bot_user_id="bot", max_people=12)
+    assert [s.user_id for s in speakers] == ["1", "2"]
+    capped = affinity.extract_speakers_newest_first(messages, bot_user_id="bot", max_people=1)
+    assert [s.user_id for s in capped] == ["1"]
+    people = [
+        affinity.BriefingPerson(display_name="甲", has_card=True, total=8.5, updated_at=1.0),
+        affinity.BriefingPerson(display_name="乙", has_card=False),
+    ]
+    text = affinity.format_proactive_briefing(people, total_label="好感度")
+    assert "甲" in text and "8.5" in text and "乙" in text and "尚无档案" in text
+    print("ok: speakers and briefing")
+
+
 def main() -> None:
     test_plugin_importable()
     test_impression_feedback()
@@ -744,6 +796,8 @@ def main() -> None:
     test_light_nudge_prompt_placeholders()
     test_nudge_impression_tool_declared()
     test_nudge_record_missing_does_not_cold_start()
+    test_proactive_tick_store_and_due()
+    test_extract_speakers_and_briefing()
     print("\n全部冒烟测试通过")
 
 
