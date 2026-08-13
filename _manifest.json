@@ -48,7 +48,12 @@
     "send.text",
     "send.image",
     "send.emoji",
-    "maisaka.context.append"
+    "maisaka.context.append",
+    "maisaka.proactive.trigger",
+    "chat.get_all_streams",
+    "message.count_new",
+    "message.get_recent",
+    "message.get_by_time_in_chat"
   ],
   "i18n": {
     "default_locale": "zh-CN"

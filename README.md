@@ -34,6 +34,8 @@
 
   > 工具的 `target` 传对方 QQ 号、昵称、别名、群名片或 person_id；省略则默认当前发言者。`dimension` 传 `total`（好感度总值）或某个维度 key。
 
+- **定期提醒（`[proactive]`）**：默认每 **300 秒** 扫描聊天流；每个流默认每 **6 小时** 最多提醒一次。只对间隔内**有过新消息**的聊天唤醒规划器（第一次见到某流只记下时间、不触发）。简报写入内部上下文后调用 `maisaka.proactive.trigger`；默认意图要求**少说话**，小幅更新用 `nudge_impression`。设 `[proactive] enabled = false` 可关闭。
+
 ## 数值与维度
 
 - **好感度（总值）**始终存在、独立加减，用顶部数字 + 横向量表条展示，可越界。
@@ -124,7 +126,8 @@
 - **`person.get_value`**：仅在冷启动加载长期记忆时读取**唯一一个 key —— `memory_points`**（`PersonInfo`
   里没有该字段时的回退路径），不读取任意 Person 字段。
 - 其余 `person.get_id` / `person.get_id_by_name` / `knowledge.search` / `llm.generate` / `render.html2png`
-  / `send.*` / `config.get` / `maisaka.context.append` 各对应一处明确用途。
+  / `send.*` / `config.get` / `chat.get_all_streams` / `message.count_new` / `message.get_recent`
+  / `message.get_by_time_in_chat` / `maisaka.context.append` / `maisaka.proactive.trigger` 各对应一处明确用途。
 
 **出站网络**：插件唯一的对外请求是拉取 QQ 头像 —— `GET https://q1.qlogo.cn/g?b=qq&nk=<QQ号>&s=640`。
 
@@ -142,6 +145,8 @@
 插件升级调整默认时，留空字段会自动跟随新值。
 
 LLM 调用（冷启动 / 刷新印象 / 查询微调 / 简介精简）的 `cap.call` RPC 超时由 `[general] llm_rpc_timeout_ms` 控制，默认 **120000**（120 秒）。查询微调与冷启动共用该超时，没有单独的 timeout 配置项。
+
+`[proactive]` 控制定期提醒：`interval_hours`（默认 6）是每个聊天流的提醒间隔；`poll_seconds`（默认 300）是扫描间隔；只对间隔内有过消息的活跃聊天触发；默认意图少说话。`enabled = false` 关闭扫描循环。
 
 ## 安装
 

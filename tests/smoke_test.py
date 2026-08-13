@@ -59,9 +59,8 @@ def test_manifest_capabilities_cover_usage() -> None:
     for proxy, method in re.findall(r"self\.ctx\.([a-z_]+)\.([a-z_0-9]+)", source):
         if proxy in proxy_to_capability:
             used.add(f"{proxy_to_capability[proxy]}.{method}")
-
-    if "maisaka.context.append" in source:
-        used.add("maisaka.context.append")
+    for a, b in re.findall(r"self\.ctx\.maisaka\.([a-z_]+)\.([a-z_0-9]+)", source):
+        used.add(f"maisaka.{a}.{b}")
 
     manifest = json.loads((PLUGIN_DIR / "_manifest.json").read_text(encoding="utf-8"))
     declared = set(manifest.get("capabilities", []))
@@ -763,6 +762,28 @@ def test_extract_speakers_and_briefing() -> None:
     print("ok: speakers and briefing")
 
 
+def test_proactive_intent_mentions_silence_and_nudge() -> None:
+    text = affinity.DEFAULT_PROACTIVE_INTENT_TEMPLATE
+    assert "nudge_impression" in text
+    assert "不要" in text or "不必" in text
+    print("ok: proactive intent")
+
+
+def test_manifest_declares_proactive_capabilities() -> None:
+    import json
+    declared = set(json.loads((PLUGIN_DIR / "_manifest.json").read_text(encoding="utf-8"))["capabilities"])
+    needed = {
+        "maisaka.proactive.trigger",
+        "maisaka.context.append",
+        "chat.get_all_streams",
+        "message.count_new",
+        "message.get_by_time_in_chat",
+        "message.get_recent",
+    }
+    assert needed <= declared, needed - declared
+    print("ok: manifest proactive capabilities")
+
+
 def main() -> None:
     test_plugin_importable()
     test_impression_feedback()
@@ -798,6 +819,8 @@ def main() -> None:
     test_nudge_record_missing_does_not_cold_start()
     test_proactive_tick_store_and_due()
     test_extract_speakers_and_briefing()
+    test_proactive_intent_mentions_silence_and_nudge()
+    test_manifest_declares_proactive_capabilities()
     print("\n全部冒烟测试通过")
 
 

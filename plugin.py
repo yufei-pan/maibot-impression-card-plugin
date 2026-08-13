@@ -94,6 +94,13 @@ DEFAULT_PROACTIVE_INTERVAL_HOURS = 6
 DEFAULT_PROACTIVE_POLL_SECONDS = 300
 DEFAULT_PROACTIVE_MAX_BRIEFING_PEOPLE = 12
 DEFAULT_PROACTIVE_MAX_STREAMS_PER_TICK = 5
+DEFAULT_PROACTIVE_INTENT_TEMPLATE = """【内部提醒·印象卡片】这不是用户消息，用户看不到这份意图。
+
+请根据内部上下文里的「印象卡片定期简报」，判断这个聊天里有没有人的印象需要小幅更新。
+- 默认不要在聊天里说话。只有当你决定发送印象卡片时才可以发言。
+- 小幅更新请调用 nudge_impression，不要用 refresh_impression，除非发生了明显的重大变化。
+- 什么都不做完全可以。
+"""
 DEFAULT_RADAR_TOP_N = 5
 DEFAULT_STORE_PATH = "data/affinity.sqlite3"
 
@@ -2092,6 +2099,8 @@ class AffinityPlugin(MaiBotPlugin):
         self._plugin_dir = Path(__file__).resolve().parent
         self._store: Optional[AffinityStore] = None
         self._pending: set[asyncio.Task] = set()
+        self._poll_task: Optional[asyncio.Task] = None
+        self._poll_stop: Optional[asyncio.Event] = None
         self._gen_locks: dict[str, asyncio.Lock] = {}
         # 配置派生缓存
         self._dimensions: list[Dimension] = resolve_dimensions(None)
@@ -2127,6 +2136,7 @@ class AffinityPlugin(MaiBotPlugin):
                 self.set_plugin_config(restored)
         self._refresh_config()
         self._store = AffinityStore(self._resolve_store_path())
+        self._restart_proactive_loop()
         self.ctx.logger.info(
             "印象卡片插件已加载：维度=%s，数据=%s",
             "、".join(d.label for d in self._dimensions),
@@ -2134,6 +2144,7 @@ class AffinityPlugin(MaiBotPlugin):
         )
 
     async def on_unload(self) -> None:
+        self._stop_proactive_loop()
         for task in list(self._pending):
             task.cancel()
         self._pending.clear()
@@ -2151,7 +2162,169 @@ class AffinityPlugin(MaiBotPlugin):
             if self._store is not None:
                 self._store.close()
             self._store = AffinityStore(new_path)
+        self._restart_proactive_loop()
         self.ctx.logger.info("印象卡片插件配置已更新: version=%s", version)
+
+    def _restart_proactive_loop(self) -> None:
+        self._stop_proactive_loop()
+        if not self.config.plugin.enabled or not self._proactive_enabled:
+            return
+        self._poll_stop = asyncio.Event()
+        self._poll_task = asyncio.create_task(self._proactive_loop())
+
+    def _stop_proactive_loop(self) -> None:
+        if self._poll_stop is not None:
+            self._poll_stop.set()
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            self._poll_task = None
+
+    async def _proactive_loop(self) -> None:
+        assert self._poll_stop is not None
+        while not self._poll_stop.is_set():
+            try:
+                await self._proactive_poll_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.ctx.logger.error("印象卡片定期提醒扫描异常: %s", exc, exc_info=True)
+            interval = max(30, self._proactive_poll_seconds)
+            try:
+                await asyncio.wait_for(self._poll_stop.wait(), timeout=interval)
+                break
+            except asyncio.TimeoutError:
+                continue
+
+    async def _proactive_poll_once(self) -> None:
+        if not self._proactive_enabled or self._store is None:
+            return
+        try:
+            raw_streams = await self.ctx.chat.get_all_streams(platform="all_platforms")
+        except Exception as exc:
+            self.ctx.logger.error("印象卡片定期提醒获取聊天流失败: %s", exc, exc_info=True)
+            return
+        if isinstance(raw_streams, list):
+            streams = raw_streams
+        elif isinstance(raw_streams, Mapping):
+            inner = raw_streams.get("streams")
+            streams = inner if isinstance(inner, list) else []
+        else:
+            streams = []
+        now = time.time()
+        interval_s = self._proactive_interval_hours * 3600
+        fired = 0
+        for item in streams:
+            if not isinstance(item, Mapping):
+                continue
+            stream_id = str(item.get("stream_id") or item.get("session_id") or "").strip()
+            if not stream_id:
+                continue
+            last = await self._store.get_proactive_last_fired(stream_id)
+            if last is None:
+                await self._store.upsert_proactive_last_fired(stream_id, now)
+                continue
+            if not is_proactive_time_due(last, now, interval_s):
+                continue
+            try:
+                count = await self.ctx.message.count_new(stream_id, str(now - interval_s))
+            except Exception:
+                continue
+            if isinstance(count, Mapping):
+                count = count.get("count", 0)
+            try:
+                if int(count) < 1:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            await self._fire_proactive_stream(stream_id, now, interval_s)
+            fired += 1
+            if fired >= self._proactive_max_streams_per_tick:
+                break
+
+    async def _fire_proactive_stream(self, stream_id: str, now: float, interval_s: float) -> None:
+        if self._store is None:
+            return
+        try:
+            try:
+                messages = await self.ctx.message.get_by_time_in_chat(
+                    stream_id, str(now - interval_s), str(now)
+                )
+            except Exception as exc:
+                self.ctx.logger.debug(
+                    "印象卡片定期提醒按时间取消息失败，改用最近消息 stream=%s: %s",
+                    stream_id,
+                    exc,
+                )
+                messages = await self.ctx.message.get_recent(
+                    stream_id, limit=max(20, self._proactive_max_briefing_people * 3)
+                )
+            if isinstance(messages, Mapping):
+                inner = messages.get("messages")
+                messages = inner if isinstance(inner, list) else []
+            if not isinstance(messages, list):
+                messages = []
+            bot_uid = str(await self.ctx.config.get("bot.qq_account", "") or "").strip()
+            speakers = extract_speakers_newest_first(
+                messages,
+                bot_user_id=bot_uid,
+                max_people=self._proactive_max_briefing_people,
+            )
+            if not bot_uid:
+                bot_nick = str(await self.ctx.config.get("bot.nickname", "") or "").strip()
+                if bot_nick:
+                    speakers = [s for s in speakers if s.nickname.strip() != bot_nick]
+            people: list[BriefingPerson] = []
+            for speaker in speakers:
+                person_id = ""
+                try:
+                    raw_id = await self.ctx.person.get_id(speaker.platform or "qq", speaker.user_id)
+                    if isinstance(raw_id, Mapping):
+                        raw_id = raw_id.get("person_id")
+                    person_id = str(raw_id or "").strip()
+                except Exception as exc:
+                    self.ctx.logger.debug(
+                        "印象卡片定期提醒解析人物失败 user=%s: %s", speaker.user_id, exc
+                    )
+                record = await self._store.get(person_id) if person_id else None
+                if record:
+                    people.append(
+                        BriefingPerson(
+                            display_name=record.display_name or speaker.nickname,
+                            has_card=True,
+                            total=record.total,
+                            updated_at=record.updated_at,
+                        )
+                    )
+                else:
+                    people.append(BriefingPerson(display_name=speaker.nickname, has_card=False))
+            body = format_proactive_briefing(people, total_label=self._total_label)
+            briefing_template = _etmpl(self.config.proactive.briefing_template, "")
+            if briefing_template:
+                body = _render(briefing_template, briefing=body, count=len(people))
+            await self.ctx.maisaka.context.append(
+                stream_id=stream_id,
+                segments=[{"type": "text", "content": body}],
+                visible_text="印象卡片定期提醒",
+                source_kind="plugin:com.0-hz.impression-card",
+            )
+            intent = _etmpl(self.config.proactive.intent_template, DEFAULT_PROACTIVE_INTENT_TEMPLATE)
+            await self.ctx.maisaka.proactive.trigger(
+                stream_id=stream_id,
+                intent=intent,
+                reason="impression_card_periodic",
+                metadata={"plugin": "impression-card"},
+            )
+        except Exception as exc:
+            self.ctx.logger.error(
+                "印象卡片定期提醒处理聊天流失败 stream=%s: %s", stream_id, exc, exc_info=True
+            )
+        finally:
+            try:
+                await self._store.upsert_proactive_last_fired(stream_id, now)
+            except Exception as exc:
+                self.ctx.logger.error(
+                    "印象卡片定期提醒写入触发时间失败 stream=%s: %s", stream_id, exc, exc_info=True
+                )
 
     def get_components(self) -> list[dict[str, Any]]:
         """收集组件声明，并把「可调维度清单」动态注入打分工具。
