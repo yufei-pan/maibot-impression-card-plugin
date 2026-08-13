@@ -41,7 +41,7 @@ from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.config import validate_plugin_config
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-CURRENT_CONFIG_VERSION = "0.2.3"
+CURRENT_CONFIG_VERSION = "0.3.0"
 SHIPPED_CONFIG_TEMPLATE_NAME = "config.default.toml"
 _PLUGIN_ROOT = Path(__file__).resolve().parent
 _CARD_FONT_FILES = (
@@ -82,6 +82,18 @@ DEFAULT_RECENT_MESSAGES_LIMIT = 512
 DEFAULT_LLM_RPC_TIMEOUT_MS = 120_000  # llm.generate 的 cap.call RPC 超时（毫秒）；Host 默认仅 30s
 DEFAULT_ADMIN_QQ_IDS: list[str] = []
 DEFAULT_REFRESH_ADMIN_ONLY = True
+DEFAULT_LIGHT_REFRESH_ENABLED = True
+DEFAULT_LIGHT_RECENT_MESSAGES_LIMIT = 48
+DEFAULT_LIGHT_RECENT_HOURS = 6
+DEFAULT_LIGHT_TEMPERATURE = 0.4
+DEFAULT_LIGHT_MAX_TOKENS = 0
+DEFAULT_LIGHT_MAX_ABS_DELTA = 0.0
+DEFAULT_LIGHT_MODEL = ""  # empty → cold_start.model
+DEFAULT_PROACTIVE_ENABLED = True
+DEFAULT_PROACTIVE_INTERVAL_HOURS = 6
+DEFAULT_PROACTIVE_POLL_SECONDS = 300
+DEFAULT_PROACTIVE_MAX_BRIEFING_PEOPLE = 12
+DEFAULT_PROACTIVE_MAX_STREAMS_PER_TICK = 5
 DEFAULT_RADAR_TOP_N = 5
 DEFAULT_STORE_PATH = "data/affinity.sqlite3"
 
@@ -1260,6 +1272,93 @@ class NotifySectionConfig(PluginConfigBase):
     )
 
 
+class LightRefreshSectionConfig(PluginConfigBase):
+    __ui_label__ = "查询微调"
+    __ui_icon__ = "sparkle"
+    __ui_order__ = 7
+
+    enabled: bool | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": "true"},
+        description="查询 /卡片 时是否先用小上下文 LLM 微调分值与简介。关闭则恢复仅渲染已存档案。",
+    )
+    recent_messages_limit: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_LIGHT_RECENT_MESSAGES_LIMIT)},
+        description="微调时参考的最近聊天条数（当前聊天流）。",
+    )
+    recent_hours: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_LIGHT_RECENT_HOURS)},
+        description="微调时只看最近多少小时的聊天。",
+    )
+    model: str | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": "planner"},
+        description="微调使用的 LLM 模型任务名；留空则沿用 cold_start.model。",
+    )
+    temperature: float | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_LIGHT_TEMPERATURE)},
+        description="微调采样温度。",
+    )
+    max_tokens: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_LIGHT_MAX_TOKENS)},
+        description="微调最大 token；0 为自动。",
+    )
+    max_abs_delta: float | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_LIGHT_MAX_ABS_DELTA)},
+        description="单次每个维度增量绝对值上限；0 表示不限制。",
+    )
+    prompt_template: str = Field(
+        default="",
+        json_schema_extra={"placeholder": ""},
+        description="微调提示词模板；留空使用内置默认。",
+    )
+
+
+class ProactiveSectionConfig(PluginConfigBase):
+    __ui_label__ = "定期提醒"
+    __ui_icon__ = "clock"
+    __ui_order__ = 8
+
+    enabled: bool | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": "true"},
+        description="是否定期向麦麦规划器提醒检查印象卡片（与查询微调开关独立）。",
+    )
+    interval_hours: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_PROACTIVE_INTERVAL_HOURS)},
+        description="每个聊天流的提醒间隔（小时）。只对间隔内有过消息的聊天触发。",
+    )
+    poll_seconds: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_PROACTIVE_POLL_SECONDS)},
+        description="扫描聊天流的间隔（秒）。",
+    )
+    max_briefing_people: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_PROACTIVE_MAX_BRIEFING_PEOPLE)},
+        description="写入规划器简报的最近发言者人数上限。",
+    )
+    max_streams_per_tick: int | None = Field(
+        default=None,
+        json_schema_extra={"placeholder": str(DEFAULT_PROACTIVE_MAX_STREAMS_PER_TICK)},
+        description="每次扫描最多唤醒多少个聊天流。",
+    )
+    intent_template: str = Field(
+        default="",
+        description="proactive.trigger 的 intent 模板；留空使用内置默认。",
+    )
+    briefing_template: str = Field(
+        default="",
+        description="注入规划器上下文的简报模板；留空使用内置默认。",
+    )
+
+
 class AffinityPluginConfig(PluginConfigBase):
     """插件完整配置。"""
 
@@ -1270,6 +1369,8 @@ class AffinityPluginConfig(PluginConfigBase):
     description: DescriptionSectionConfig = Field(default_factory=DescriptionSectionConfig)
     cold_start: ColdStartSectionConfig = Field(default_factory=ColdStartSectionConfig)
     notify: NotifySectionConfig = Field(default_factory=NotifySectionConfig)
+    light_refresh: LightRefreshSectionConfig = Field(default_factory=LightRefreshSectionConfig)
+    proactive: ProactiveSectionConfig = Field(default_factory=ProactiveSectionConfig)
 
 
 # --------------------------------------------------------------------------- #
@@ -1799,6 +1900,15 @@ class AffinityPlugin(MaiBotPlugin):
         self._store_path = DEFAULT_STORE_PATH
         self._admin_qq_ids = frozenset()
         self._refresh_admin_only = DEFAULT_REFRESH_ADMIN_ONLY
+        self._light_refresh_enabled = DEFAULT_LIGHT_REFRESH_ENABLED
+        self._light_recent_messages_limit = DEFAULT_LIGHT_RECENT_MESSAGES_LIMIT
+        self._light_recent_hours = DEFAULT_LIGHT_RECENT_HOURS
+        self._light_max_abs_delta = DEFAULT_LIGHT_MAX_ABS_DELTA
+        self._proactive_enabled = DEFAULT_PROACTIVE_ENABLED
+        self._proactive_interval_hours = DEFAULT_PROACTIVE_INTERVAL_HOURS
+        self._proactive_poll_seconds = DEFAULT_PROACTIVE_POLL_SECONDS
+        self._proactive_max_briefing_people = DEFAULT_PROACTIVE_MAX_BRIEFING_PEOPLE
+        self._proactive_max_streams_per_tick = DEFAULT_PROACTIVE_MAX_STREAMS_PER_TICK
 
     # ------------------------------------------------------------------ #
     # 生命周期
@@ -1911,6 +2021,27 @@ class AffinityPlugin(MaiBotPlugin):
         self._store_path = _estr(g.store_path, DEFAULT_STORE_PATH)
         self._admin_qq_ids = _parse_admin_qq_ids(g.admin_qq_ids)
         self._refresh_admin_only = _ebool(g.refresh_admin_only, DEFAULT_REFRESH_ADMIN_ONLY)
+        lr = cfg.light_refresh
+        self._light_refresh_enabled = _ebool(lr.enabled, DEFAULT_LIGHT_REFRESH_ENABLED)
+        self._light_recent_messages_limit = _eint(
+            lr.recent_messages_limit, DEFAULT_LIGHT_RECENT_MESSAGES_LIMIT, minimum=0
+        )
+        self._light_recent_hours = _eint(lr.recent_hours, DEFAULT_LIGHT_RECENT_HOURS, minimum=1)
+        self._light_max_abs_delta = _efloat(lr.max_abs_delta, DEFAULT_LIGHT_MAX_ABS_DELTA)
+        pr = cfg.proactive
+        self._proactive_enabled = _ebool(pr.enabled, DEFAULT_PROACTIVE_ENABLED)
+        self._proactive_interval_hours = _eint(
+            pr.interval_hours, DEFAULT_PROACTIVE_INTERVAL_HOURS, minimum=1
+        )
+        self._proactive_poll_seconds = _eint(
+            pr.poll_seconds, DEFAULT_PROACTIVE_POLL_SECONDS, minimum=30
+        )
+        self._proactive_max_briefing_people = _eint(
+            pr.max_briefing_people, DEFAULT_PROACTIVE_MAX_BRIEFING_PEOPLE, minimum=1
+        )
+        self._proactive_max_streams_per_tick = _eint(
+            pr.max_streams_per_tick, DEFAULT_PROACTIVE_MAX_STREAMS_PER_TICK, minimum=1
+        )
 
     def _is_admin(self, platform: str, user_id: str) -> bool:
         if not self._admin_qq_ids:

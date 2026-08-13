@@ -548,6 +548,48 @@ def test_impression_feedback() -> None:
     assert affinity._coalesce_text("p", {"impression": "x"}, "impression") == "p"
 
 
+def test_config_version_0_3_0() -> None:
+    assert affinity.CURRENT_CONFIG_VERSION == "0.3.0"
+    default_config = affinity.AffinityPlugin.build_default_config()
+    assert default_config["plugin"]["config_version"] == "0.3.0"
+    shipped = tomllib.loads((PLUGIN_DIR / "config.default.toml").read_text(encoding="utf-8"))
+    assert shipped["plugin"]["config_version"] == "0.3.0"
+    print("ok: config_version 0.3.0")
+
+
+def test_light_refresh_and_proactive_config_defaults() -> None:
+    default_config = affinity.AffinityPlugin.build_default_config()
+    assert "light_refresh" in default_config
+    assert "proactive" in default_config
+    lr = default_config["light_refresh"]
+    pr = default_config["proactive"]
+    # Optional fields stay None so empty TOML follows code defaults
+    assert lr["enabled"] is None
+    assert lr["recent_messages_limit"] is None
+    assert lr["recent_hours"] is None
+    assert lr["max_abs_delta"] is None
+    assert lr["model"] is None or lr["model"] in ("", None)
+    assert pr["enabled"] is None
+    assert pr["interval_hours"] is None
+    assert pr["poll_seconds"] is None
+    schema = affinity.AffinityPlugin.build_config_schema()
+    assert schema["sections"]["light_refresh"]["title"] == "查询微调"
+    assert schema["sections"]["proactive"]["title"] == "定期提醒"
+    inst = affinity.create_plugin()
+    inst.set_plugin_config(affinity.AffinityPlugin.build_default_config())
+    inst._refresh_config()
+    assert inst._light_refresh_enabled is True
+    assert inst._light_recent_messages_limit == 48
+    assert inst._light_recent_hours == 6
+    assert inst._light_max_abs_delta == 0.0
+    assert inst._proactive_enabled is True
+    assert inst._proactive_interval_hours == 6
+    assert inst._proactive_poll_seconds == 300
+    assert inst._proactive_max_briefing_people == 12
+    assert inst._proactive_max_streams_per_tick == 5
+    print("ok: light_refresh / proactive config defaults")
+
+
 def main() -> None:
     test_plugin_importable()
     test_impression_feedback()
@@ -573,6 +615,8 @@ def main() -> None:
     test_identity_resolution()
     test_command_admin_permission()
     test_top_dimensions_selection()
+    test_config_version_0_3_0()
+    test_light_refresh_and_proactive_config_defaults()
     print("\n全部冒烟测试通过")
 
 

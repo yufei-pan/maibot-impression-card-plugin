@@ -7,7 +7,7 @@
 # 是否启用插件
 enabled = true
 # 配置版本
-config_version = "0.2.3"
+config_version = "0.3.0"
 
 [general]
 # 好感度整体评分的显示名。
@@ -141,3 +141,22 @@ config_version = "0.2.3"
 # notify_dimensions = ["total"]
 # 系统通知文案模板。占位符：{name}{dimension}{delta}{reason}{nickname}；可选 {new_value}
 # notify_template = ""
+
+[light_refresh]
+# enabled = true
+# recent_messages_limit = 48
+# recent_hours = 6
+# model = ""
+# temperature = 0.4
+# max_tokens = 0
+# max_abs_delta = 0
+# prompt_template = ""
+
+[proactive]
+# enabled = true
+# interval_hours = 6
+# poll_seconds = 300
+# max_briefing_people = 12
+# max_streams_per_tick = 5
+# intent_template = ""
+# briefing_template = ""
