@@ -1929,6 +1929,16 @@ def is_proactive_time_due(last_fired_at: Optional[float], now: float, interval_s
     return (now - float(last_fired_at)) >= float(interval_s)
 
 
+def _unwrap_list_result(value: Any) -> list | None:
+    """Host 失败信封是 ``{"success": False, "error": ...}`` 且不抛异常；只有 list 才可用。"""
+    return value if isinstance(value, list) else None
+
+
+def _unwrap_str_result(value: Any) -> str | None:
+    """``build_readable`` 失败时同样返回信封 dict；只有 str 才可写入 prompt。"""
+    return value if isinstance(value, str) else None
+
+
 def _message_timestamp(msg: Mapping[str, Any]) -> float:
     try:
         return float(msg.get("timestamp") or 0.0)
@@ -2203,13 +2213,10 @@ class AffinityPlugin(MaiBotPlugin):
         except Exception as exc:
             self.ctx.logger.error("印象卡片定期提醒获取聊天流失败: %s", exc, exc_info=True)
             return
-        if isinstance(raw_streams, list):
-            streams = raw_streams
-        elif isinstance(raw_streams, Mapping):
-            inner = raw_streams.get("streams")
-            streams = inner if isinstance(inner, list) else []
-        else:
-            streams = []
+        streams = _unwrap_list_result(raw_streams)
+        if streams is None:
+            self.ctx.logger.error("印象卡片定期提醒获取聊天流失败: 返回非列表 %s", raw_streams)
+            return
         now = time.time()
         interval_s = self._proactive_interval_hours * 3600
         fired = 0
@@ -2246,7 +2253,7 @@ class AffinityPlugin(MaiBotPlugin):
             return
         try:
             try:
-                messages = await self.ctx.message.get_by_time_in_chat(
+                raw_messages = await self.ctx.message.get_by_time_in_chat(
                     stream_id, str(now - interval_s), str(now)
                 )
             except Exception as exc:
@@ -2255,14 +2262,26 @@ class AffinityPlugin(MaiBotPlugin):
                     stream_id,
                     exc,
                 )
-                messages = await self.ctx.message.get_recent(
+                raw_messages = None
+            messages = _unwrap_list_result(raw_messages)
+            if messages is None:
+                if raw_messages is not None:
+                    self.ctx.logger.debug(
+                        "印象卡片定期提醒按时间取消息返回非列表，改用最近消息 stream=%s: %s",
+                        stream_id,
+                        raw_messages,
+                    )
+                raw_messages = await self.ctx.message.get_recent(
                     stream_id, limit=max(20, self._proactive_max_briefing_people * 3)
                 )
-            if isinstance(messages, Mapping):
-                inner = messages.get("messages")
-                messages = inner if isinstance(inner, list) else []
-            if not isinstance(messages, list):
-                messages = []
+                messages = _unwrap_list_result(raw_messages)
+                if messages is None:
+                    self.ctx.logger.error(
+                        "印象卡片定期提醒最近消息返回非列表，跳过构建 stream=%s: %s",
+                        stream_id,
+                        raw_messages,
+                    )
+                    return
             bot_uid = str(await self.ctx.config.get("bot.qq_account", "") or "").strip()
             speakers = extract_speakers_newest_first(
                 messages,
@@ -3645,13 +3664,18 @@ class AffinityPlugin(MaiBotPlugin):
         try:
             # 在 Host 端查询并格式化；勿把 get_recent 返回的 dict 再传给 build_readable。
             now = time.time()
-            return await self.ctx.message.build_readable(
+            raw = await self.ctx.message.build_readable(
                 messages=None,
                 chat_id=stream_id,
                 start_time=now - 24 * 3600,
                 end_time=now,
                 limit=self._recent_messages_limit,
             )
+            text = _unwrap_str_result(raw)
+            if text is None:
+                self.ctx.logger.debug("获取最近聊天失败: 返回非字符串 %s", raw)
+                return ""
+            return text
         except Exception as exc:
             self.ctx.logger.debug("获取最近聊天失败: %s", exc)
             return ""
@@ -3662,13 +3686,18 @@ class AffinityPlugin(MaiBotPlugin):
         try:
             now = time.time()
             start = now - self._light_recent_hours * 3600
-            return await self.ctx.message.build_readable(
+            raw = await self.ctx.message.build_readable(
                 messages=None,
                 chat_id=stream_id,
                 start_time=start,
                 end_time=now,
                 limit=self._light_recent_messages_limit,
             )
+            text = _unwrap_str_result(raw)
+            if text is None:
+                self.ctx.logger.debug("获取微调用最近聊天失败: 返回非字符串 %s", raw)
+                return ""
+            return text
         except Exception as exc:
             self.ctx.logger.debug("获取微调用最近聊天失败: %s", exc)
             return ""

@@ -769,6 +769,22 @@ def test_proactive_intent_mentions_silence_and_nudge() -> None:
     print("ok: proactive intent")
 
 
+def test_unwrap_rpc_results() -> None:
+    """Host 失败信封是 dict 且不抛异常；只有真正的 list/str 才可继续用。"""
+    assert affinity._unwrap_list_result([{"id": 1}]) == [{"id": 1}]
+    assert affinity._unwrap_list_result([]) == []
+    assert affinity._unwrap_list_result({"success": False, "error": "denied"}) is None
+    assert affinity._unwrap_list_result({"success": True, "streams": [{"stream_id": "s"}]}) is None
+    assert affinity._unwrap_list_result("not-a-list") is None
+    assert affinity._unwrap_list_result(None) is None
+    assert affinity._unwrap_str_result("最近聊天") == "最近聊天"
+    assert affinity._unwrap_str_result("") == ""
+    assert affinity._unwrap_str_result({"success": False, "error": "denied"}) is None
+    assert affinity._unwrap_str_result(["chunk"]) is None
+    assert affinity._unwrap_str_result(None) is None
+    print("ok: unwrap rpc results")
+
+
 def test_manifest_declares_proactive_capabilities() -> None:
     import json
     declared = set(json.loads((PLUGIN_DIR / "_manifest.json").read_text(encoding="utf-8"))["capabilities"])
@@ -820,6 +836,7 @@ def main() -> None:
     test_proactive_tick_store_and_due()
     test_extract_speakers_and_briefing()
     test_proactive_intent_mentions_silence_and_nudge()
+    test_unwrap_rpc_results()
     test_manifest_declares_proactive_capabilities()
     print("\n全部冒烟测试通过")
 
