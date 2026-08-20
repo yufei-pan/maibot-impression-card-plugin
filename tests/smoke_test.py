@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import tomllib
 from io import BytesIO
@@ -762,6 +763,173 @@ def test_extract_speakers_and_briefing() -> None:
     print("ok: speakers and briefing")
 
 
+def test_proactive_stream_prefers_reported_bot_account_and_falls_back() -> None:
+    """多账号 stream 优先排除 adapter 账号，缺失时回退到全局账号。"""
+    import tempfile
+    from types import SimpleNamespace
+
+    captured_context: list[str] = []
+
+    class Store:
+        async def get(self, _person_id: str) -> None:
+            return None
+
+        async def upsert_proactive_last_fired(self, _stream_id: str, _now: float) -> None:
+            return None
+
+    async def get_by_time_in_chat(*_args: object) -> list[dict[str, object]]:
+        return [
+            {
+                "timestamp": "200",
+                "platform": "qq",
+                "message_info": {
+                    "user_info": {"user_id": "bot-2", "user_nickname": "麦麦二号"}
+                },
+            },
+            {
+                "timestamp": "100",
+                "platform": "qq",
+                "message_info": {
+                    "user_info": {"user_id": "human-1", "user_nickname": "玩家甲"}
+                },
+            },
+            {
+                "timestamp": "50",
+                "platform": "qq",
+                "message_info": {
+                    "user_info": {"user_id": "bot-1", "user_nickname": "麦麦一号"}
+                },
+            },
+        ]
+
+    async def get_person_id(_platform: str, _user_id: str) -> str:
+        return ""
+
+    async def get_config(key: str, default: object = "") -> object:
+        if key == "bot.qq_account":
+            return "bot-1"
+        if key == "bot.nickname":
+            return "麦麦一号"
+        return default
+
+    async def append_context(**kwargs: object) -> None:
+        segments = kwargs["segments"]
+        captured_context.append(segments[0]["content"])
+
+    async def trigger(**_kwargs: object) -> None:
+        return None
+
+    plugin = affinity.AffinityPlugin()
+    plugin.set_plugin_config(affinity.AffinityPluginConfig().model_dump(mode="python"))
+    plugin._store = Store()
+    plugin._proactive_max_briefing_people = 12
+    plugin._total_label = "好感度"
+    plugin._set_context(
+        SimpleNamespace(
+            logger=SimpleNamespace(debug=lambda *_a, **_k: None, error=lambda *_a, **_k: None),
+            message=SimpleNamespace(get_by_time_in_chat=get_by_time_in_chat),
+            person=SimpleNamespace(get_id=get_person_id),
+            config=SimpleNamespace(get=get_config),
+            maisaka=SimpleNamespace(
+                context=SimpleNamespace(append=append_context),
+                proactive=SimpleNamespace(trigger=trigger),
+            ),
+            paths=SimpleNamespace(data_dir=Path(tempfile.mkdtemp(prefix="affinity-items-"))),
+        )
+    )
+
+    asyncio.run(
+        plugin._fire_proactive_stream(
+            "stream-2",
+            now=1000.0,
+            interval_s=100.0,
+            bot_user_id="bot-2",
+        )
+    )
+
+    assert len(captured_context) == 1
+    assert "玩家甲" in captured_context[0]
+    assert "麦麦二号" not in captured_context[0]
+    assert "麦麦一号" in captured_context[0]
+
+    captured_context.clear()
+    asyncio.run(
+        plugin._fire_proactive_stream(
+            "stream-2",
+            now=1000.0,
+            interval_s=100.0,
+        )
+    )
+
+    assert len(captured_context) == 1
+    assert "玩家甲" in captured_context[0]
+    assert "麦麦一号" not in captured_context[0]
+    assert "麦麦二号" in captured_context[0]
+
+
+def test_proactive_poll_forwards_stream_account_id() -> None:
+    """扫描聊天流时必须把该流的 account_id 传给提醒处理。"""
+    from types import SimpleNamespace
+
+    calls: list[tuple[str, str]] = []
+
+    class Store:
+        async def get_proactive_last_fired(self, _stream_id: str) -> float:
+            return 1.0
+
+        async def upsert_proactive_last_fired(self, _stream_id: str, _now: float) -> None:
+            return None
+
+    async def get_all_streams(*, platform: str) -> list[dict[str, object]]:
+        assert platform == "all_platforms"
+        return [
+            {
+                "session_id": "stream-2",
+                "stream_id": "stream-2",
+                "platform": "qq",
+                "user_id": "human-1",
+                "user_nickname": "玩家甲",
+                "user_cardname": "",
+                "group_id": "group-1",
+                "group_name": "测试群",
+                "account_id": "bot-2",
+                "scope": "default",
+                "is_group_session": True,
+                "chat_type": "group",
+            }
+        ]
+
+    async def count_new(_stream_id: str, _since: str) -> int:
+        return 1
+
+    async def capture_fire(
+        stream_id: str,
+        _now: float,
+        _interval_s: float,
+        *,
+        bot_user_id: str = "",
+    ) -> None:
+        calls.append((stream_id, bot_user_id))
+
+    plugin = affinity.AffinityPlugin()
+    plugin._proactive_enabled = True
+    plugin._proactive_interval_hours = 6
+    plugin._proactive_max_streams_per_tick = 5
+    plugin._store = Store()
+    plugin._set_context(
+        SimpleNamespace(
+            logger=SimpleNamespace(error=lambda *_a, **_k: None),
+            chat=SimpleNamespace(get_all_streams=get_all_streams),
+            message=SimpleNamespace(count_new=count_new),
+        )
+    )
+    plugin._fire_proactive_stream = capture_fire
+
+    asyncio.run(plugin._proactive_poll_once())
+
+    assert calls == [("stream-2", "bot-2")]
+
+
 def test_proactive_intent_mentions_silence_and_nudge() -> None:
     text = affinity.DEFAULT_PROACTIVE_INTENT_TEMPLATE
     assert "nudge_impression" in text
@@ -835,6 +1003,8 @@ def main() -> None:
     test_nudge_record_missing_does_not_cold_start()
     test_proactive_tick_store_and_due()
     test_extract_speakers_and_briefing()
+    test_proactive_stream_prefers_reported_bot_account_and_falls_back()
+    test_proactive_poll_forwards_stream_account_id()
     test_proactive_intent_mentions_silence_and_nudge()
     test_unwrap_rpc_results()
     test_manifest_declares_proactive_capabilities()

@@ -5,6 +5,13 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.3.2] - 2026-08-19
+
+### 修复
+
+- 定期提醒按聊天流的适配器实际账号排除机器人自身，多账号环境不再把其他机器人账号列为人物
+- 旧 Host 未提供聊天流账号时继续回退到 `bot.qq_account`
+
 ## [0.3.1] - 2026-08-13
 
 ### 变更

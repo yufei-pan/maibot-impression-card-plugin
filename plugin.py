@@ -2243,12 +2243,25 @@ class AffinityPlugin(MaiBotPlugin):
                     continue
             except (TypeError, ValueError):
                 continue
-            await self._fire_proactive_stream(stream_id, now, interval_s)
+            bot_user_id = str(item.get("account_id") or "").strip()
+            await self._fire_proactive_stream(
+                stream_id,
+                now,
+                interval_s,
+                bot_user_id=bot_user_id,
+            )
             fired += 1
             if fired >= self._proactive_max_streams_per_tick:
                 break
 
-    async def _fire_proactive_stream(self, stream_id: str, now: float, interval_s: float) -> None:
+    async def _fire_proactive_stream(
+        self,
+        stream_id: str,
+        now: float,
+        interval_s: float,
+        *,
+        bot_user_id: str = "",
+    ) -> None:
         if self._store is None:
             return
         try:
@@ -2282,7 +2295,9 @@ class AffinityPlugin(MaiBotPlugin):
                         raw_messages,
                     )
                     return
-            bot_uid = str(await self.ctx.config.get("bot.qq_account", "") or "").strip()
+            bot_uid = str(bot_user_id or "").strip()
+            if not bot_uid:
+                bot_uid = str(await self.ctx.config.get("bot.qq_account", "") or "").strip()
             speakers = extract_speakers_newest_first(
                 messages,
                 bot_user_id=bot_uid,
