@@ -695,6 +695,92 @@ def test_nudge_impression_tool_declared() -> None:
     print("ok: nudge_impression tool declared")
 
 
+def test_resolve_llm_route_prefers_task_names() -> None:
+    assert affinity.resolve_llm_route("utils", ["utils", "planner", "replyer"]) == ("utils", None)
+    assert affinity.resolve_llm_route("planner", ["utils", "planner"]) == ("planner", None)
+    assert affinity.resolve_llm_route(" replyer ", ["replyer"]) == ("replyer", None)
+    print("ok: Host task names route to task_name")
+
+
+def test_resolve_llm_route_uses_model_name_when_not_a_task() -> None:
+    assert affinity.resolve_llm_route("step-5-preview", ["utils", "planner", "replyer"]) == (
+        None,
+        "step-5-preview",
+    )
+    print("ok: concrete model names route to model_name")
+
+
+def test_resolve_llm_route_listing_unavailable_falls_back_to_task() -> None:
+    """枚举失败时按任务名，避免 SDK 2.8.1 把 utils 当成具体模型。"""
+    assert affinity.resolve_llm_route("utils", None) == ("utils", None)
+    assert affinity.resolve_llm_route("utils", []) == ("utils", None)
+    assert affinity.resolve_llm_route("", ["utils"]) == (None, None)
+    print("ok: missing task list falls back to task_name")
+
+
+def _llm_plugin_with_tasks(compact_model: str, tasks: list[str] | None):
+    from types import SimpleNamespace
+
+    captured: list[dict[str, object]] = []
+
+    async def generate(**kwargs: object) -> dict[str, object]:
+        captured.append(dict(kwargs))
+        return {"success": False, "error": "stop"}
+
+    async def get_available_models() -> list[str]:
+        if tasks is None:
+            raise RuntimeError("listing failed")
+        return list(tasks)
+
+    async def get_config(_key: str, default: object = "") -> object:
+        return default
+
+    inst = affinity.create_plugin()
+    cfg = affinity.AffinityPluginConfig().model_dump(mode="python")
+    cfg["description"]["compact_model"] = compact_model
+    inst.set_plugin_config(cfg)
+    inst._llm_rpc_timeout_ms = 120_000
+    inst._set_context(
+        SimpleNamespace(
+            logger=SimpleNamespace(warning=lambda *_a, **_k: None),
+            llm=SimpleNamespace(generate=generate, get_available_models=get_available_models),
+            config=SimpleNamespace(get=get_config),
+        )
+    )
+    return inst, captured
+
+
+def test_llm_generate_uses_task_name_not_model() -> None:
+    """配置里的任务名必须走 task_name；塞进 model 会在 SDK 2.8.1 上报「未找到名为 'utils' 的模型」。"""
+    inst, captured = _llm_plugin_with_tasks("utils", ["utils", "planner", "replyer"])
+    asyncio.run(inst._compact_description_text("甲", "很长的简介" * 50, 32, "chars"))
+    assert captured, "expected an llm.generate call"
+    kwargs = captured[0]
+    assert kwargs.get("task_name") == "utils"
+    assert not kwargs.get("model")
+    assert not kwargs.get("model_name")
+    print("ok: compact LLM uses task_name, not model")
+
+
+def test_llm_generate_uses_model_name_for_concrete_model() -> None:
+    inst, captured = _llm_plugin_with_tasks("step-5-preview", ["utils", "planner", "replyer"])
+    asyncio.run(inst._compact_description_text("甲", "很长的简介" * 50, 32, "chars"))
+    assert captured, "expected an llm.generate call"
+    kwargs = captured[0]
+    assert kwargs.get("model_name") == "step-5-preview"
+    assert not kwargs.get("task_name")
+    assert not kwargs.get("model")
+    print("ok: compact LLM uses model_name for concrete models")
+
+
+def test_llm_generate_listing_failure_keeps_task_name() -> None:
+    inst, captured = _llm_plugin_with_tasks("utils", None)
+    asyncio.run(inst._compact_description_text("甲", "很长的简介" * 50, 32, "chars"))
+    assert captured[0].get("task_name") == "utils"
+    assert not captured[0].get("model_name")
+    print("ok: compact LLM keeps task_name when listing fails")
+
+
 def test_nudge_record_missing_does_not_cold_start() -> None:
     import asyncio
     import tempfile
@@ -1000,6 +1086,12 @@ def main() -> None:
     test_nudge_max_abs_delta_and_long_note_guard()
     test_light_nudge_prompt_placeholders()
     test_nudge_impression_tool_declared()
+    test_resolve_llm_route_prefers_task_names()
+    test_resolve_llm_route_uses_model_name_when_not_a_task()
+    test_resolve_llm_route_listing_unavailable_falls_back_to_task()
+    test_llm_generate_uses_task_name_not_model()
+    test_llm_generate_uses_model_name_for_concrete_model()
+    test_llm_generate_listing_failure_keeps_task_name()
     test_nudge_record_missing_does_not_cold_start()
     test_proactive_tick_store_and_due()
     test_extract_speakers_and_briefing()

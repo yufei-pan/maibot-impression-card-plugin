@@ -1257,7 +1257,7 @@ class DescriptionSectionConfig(PluginConfigBase):
     compact_model: str | None = Field(
         default=None,
         json_schema_extra={"placeholder": DEFAULT_COMPACT_MODEL},
-        description="精简简介使用的 LLM 模型任务名。",
+        description="精简简介使用的 LLM：Host 任务名（utils/planner/replyer）或 [[models]] 里的具体模型名。",
     )
     compact_temperature: float | None = Field(
         default=None,
@@ -1289,7 +1289,7 @@ class ColdStartSectionConfig(PluginConfigBase):
     model: str | None = Field(
         default=None,
         json_schema_extra={"placeholder": DEFAULT_COLD_START_MODEL},
-        description="冷启动 / 刷新印象使用的 LLM 模型任务名。",
+        description="冷启动 / 刷新印象使用的 LLM：Host 任务名或 [[models]] 里的具体模型名。",
     )
     temperature: float | None = Field(
         default=None,
@@ -1378,7 +1378,7 @@ class LightRefreshSectionConfig(PluginConfigBase):
     model: str | None = Field(
         default=None,
         json_schema_extra={"placeholder": "planner"},
-        description="微调使用的 LLM 模型任务名；留空则沿用 cold_start.model。",
+        description="微调使用的 LLM：Host 任务名或具体模型名；留空则沿用 cold_start.model。",
     )
     temperature: float | None = Field(
         default=None,
@@ -1517,6 +1517,28 @@ def _estr(value: str | None, default: str) -> str:
     if value is None or not str(value).strip():
         return default
     return str(value).strip()
+
+
+def resolve_llm_route(
+    configured: str,
+    available_tasks: Sequence[str] | None,
+) -> tuple[str | None, str | None]:
+    """把配置值拆成 Host 的 ``task_name`` / ``model_name``。
+
+    ``available_tasks`` 来自 ``llm.get_available_models()``（返回的是任务名）。
+    命中任务则走 ``task_name``（与任务同名的具体模型也按任务，对齐 Host）；
+    否则走 ``model_name`` 直选 ``[[models]]``。列表为空或不可用时按任务名，
+    避免 SDK 2.8.1 把 ``utils`` 当成具体模型。
+    """
+    name = str(configured or "").strip()
+    if not name:
+        return None, None
+    tasks = {str(item).strip() for item in (available_tasks or []) if str(item).strip()}
+    if not tasks:
+        return name, None
+    if name in tasks:
+        return name, None
+    return None, name
 
 
 def _ebool(value: bool | None, default: bool) -> bool:
@@ -3006,6 +3028,35 @@ class AffinityPlugin(MaiBotPlugin):
         elif len(text) > size_limit:
             self._schedule(self._safe_compact_description(person_id, name, size_limit, "chars"))
 
+    async def _llm_generate(
+        self,
+        prompt: str,
+        configured: str,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """按配置调用 Host LLM：任务名走 ``task_name``，否则 ``model_name``。"""
+        available: list[str] | None
+        try:
+            raw = await self.ctx.llm.get_available_models()
+            available = list(raw) if raw else []
+        except Exception as exc:
+            self.ctx.logger.warning("获取 Host 模型任务列表失败，按任务名调用: %s", exc)
+            available = None
+        task_name, model_name = resolve_llm_route(configured, available)
+        kwargs: dict[str, Any] = {
+            "prompt": prompt,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "timeout_ms": self._llm_rpc_timeout_ms,
+        }
+        if task_name:
+            kwargs["task_name"] = task_name
+        if model_name:
+            kwargs["model_name"] = model_name
+        return await self.ctx.llm.generate(**kwargs)
+
     async def _safe_compact_description(self, person_id: str, name: str, limit: int, limit_unit: str) -> None:
         try:
             await self._compact_description(person_id, name, limit, limit_unit)
@@ -3016,7 +3067,7 @@ class AffinityPlugin(MaiBotPlugin):
 
     async def _compact_description_text(self, name: str, text: str, limit: int, limit_unit: str) -> str:
         desc_cfg = self.config.description
-        model = _estr(desc_cfg.compact_model, DEFAULT_COMPACT_MODEL)
+        task_name = _estr(desc_cfg.compact_model, DEFAULT_COMPACT_MODEL)
         temperature = _efloat(desc_cfg.compact_temperature, DEFAULT_COMPACT_TEMPERATURE)
         max_tokens = _eint(desc_cfg.compact_max_tokens, DEFAULT_COMPACT_MAX_TOKENS, minimum=0)
         if max_tokens <= 0:
@@ -3043,12 +3094,11 @@ class AffinityPlugin(MaiBotPlugin):
                 limit_label=label,
                 description=current,
             )
-            result = await self.ctx.llm.generate(
-                prompt=prompt,
-                model=model,
+            result = await self._llm_generate(
+                prompt,
+                task_name,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                timeout_ms=self._llm_rpc_timeout_ms,
             )
             if not result.get("success"):
                 self.ctx.logger.warning("简介精简第 %d 次 LLM 调用失败: %s", attempt, result.get("error"))
@@ -3477,7 +3527,7 @@ class AffinityPlugin(MaiBotPlugin):
             personality = await self.ctx.config.get("personality.personality", "") or ""
             reply_style = await self.ctx.config.get("personality.reply_style", "") or ""
 
-            model = _estr(self.config.light_refresh.model, "") or _estr(
+            task_name = _estr(self.config.light_refresh.model, "") or _estr(
                 self.config.cold_start.model, DEFAULT_COLD_START_MODEL
             )
             temperature = _efloat(self.config.light_refresh.temperature, DEFAULT_LIGHT_TEMPERATURE)
@@ -3516,12 +3566,11 @@ class AffinityPlugin(MaiBotPlugin):
                 error="微调印象失败，已保留原档案。",
             )
             try:
-                result = await self.ctx.llm.generate(
-                    prompt=prompt,
-                    model=model,
+                result = await self._llm_generate(
+                    prompt,
+                    task_name,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout_ms=self._llm_rpc_timeout_ms,
                 )
             except Exception as exc:
                 self.ctx.logger.warning("微调印象 LLM 调用异常: %s", exc, exc_info=True)
@@ -3557,7 +3606,7 @@ class AffinityPlugin(MaiBotPlugin):
     ) -> AffinityRecord:
         await self._load_memory_for_generation(ref)
         cold = self.config.cold_start
-        model = _estr(cold.model, DEFAULT_COLD_START_MODEL)
+        task_name = _estr(cold.model, DEFAULT_COLD_START_MODEL)
         is_refresh = existing is not None
         if is_refresh and cold.refresh_temperature is not None:
             temperature = _efloat(cold.refresh_temperature, DEFAULT_COLD_START_TEMPERATURE)
@@ -3613,12 +3662,11 @@ class AffinityPlugin(MaiBotPlugin):
         record = existing or self._new_record(ref)
         self._sync_identity(record, ref)
         try:
-            result = await self.ctx.llm.generate(
-                prompt=prompt,
-                model=model,
+            result = await self._llm_generate(
+                prompt,
+                task_name,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                timeout_ms=self._llm_rpc_timeout_ms,
             )
         except Exception as exc:
             self.ctx.logger.warning("%s LLM 调用异常: %s", "刷新印象" if is_refresh else "冷启动", exc, exc_info=True)

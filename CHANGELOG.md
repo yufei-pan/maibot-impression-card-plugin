@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.3.3] - 2026-09-20
+
+### 修复
+
+- LLM 调用改为传 `task_name`（Host 模型任务名）。SDK 2.8.1 会默认附带 `task_name="utils"`，若再把 `utils`/`planner`/`replyer` 放进 `model`，Host 会当成具体模型名并报「未找到名为 'utils' 的模型」
+
+### 新增
+
+- 用 `llm.get_available_models()` 判断配置值：命中任务名走 `task_name`，否则走 `model_name` 直选具体模型
+
 ## [0.3.2] - 2026-08-19
 
 ### 修复

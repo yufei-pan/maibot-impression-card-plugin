@@ -100,7 +100,7 @@ config_version = "0.3.0"
 # impression_note_size_limit = 81920
 # 持久化印象笔记：库中可累积长文；发卡时若超 size_limit 则 LLM 精简卡面显示而不改库。关闭时忽略 impression_note_size_limit，仅用 size_limit。
 # persistent_impression = true
-# 精简简介使用的 LLM 模型任务名。
+# 精简简介使用的 LLM：Host 任务名（utils/planner/replyer）或 [[models]] 里的具体模型名。
 # compact_model = "planner"
 # 精简简介的采样温度。
 # compact_temperature = 0.4
@@ -113,7 +113,7 @@ config_version = "0.3.0"
 # compact_prompt_template = ""
 
 [cold_start]
-# 冷启动 / 刷新印象使用的 LLM 模型任务名。
+# 冷启动 / 刷新印象使用的 LLM：Host 任务名或 [[models]] 里的具体模型名。
 # model = "planner"
 # 冷启动 / 刷新的采样温度（偏低更稳定；刷新可单独调高 refresh_temperature）。
 # temperature = 0.3
@@ -146,7 +146,7 @@ config_version = "0.3.0"
 # enabled = false
 # recent_messages_limit = 48
 # recent_hours = 6
-# model = ""
+# model = ""  # Host 任务名或具体模型名；留空则沿用 cold_start.model
 # temperature = 0.4
 # max_tokens = 0
 # max_abs_delta = 0
