@@ -80,6 +80,17 @@ DEFAULT_ALLOW_QUERY_OTHERS = True
 DEFAULT_PRUNE_REMOVED_DIMENSIONS = False
 DEFAULT_RECENT_MESSAGES_LIMIT = 512
 DEFAULT_LLM_RPC_TIMEOUT_MS = 120_000  # llm.generate 的 cap.call RPC 超时（毫秒）；Host 默认仅 30s
+COMPONENT_RPC_HEADROOM_MS = 10_000  # Host 组件 RPC 比 LLM 超时多出的余量
+# 这些组件会在返回 Host 之前等待 llm.generate。nudge_impression 已改为后台，不在此列。
+LLM_BOUND_COMPONENTS = frozenset(
+    {
+        "get_impression_detail",
+        "refresh_impression",
+        "send_impression_card",
+        "impression_card",
+        "impression_refresh",
+    }
+)
 DEFAULT_ADMIN_QQ_IDS: list[str] = []
 DEFAULT_REFRESH_ADMIN_ONLY = True
 DEFAULT_LIGHT_REFRESH_ENABLED = False
@@ -1500,6 +1511,11 @@ def _hoist_dimensions_for_toml(config: Mapping[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # 生效配置解析（None / 空 = 跟随代码默认）
 # --------------------------------------------------------------------------- #
+def component_rpc_timeout_ms(llm_rpc_timeout_ms: int) -> int:
+    """Host 调用本插件组件时的等待上限：LLM 超时再加 10 秒。"""
+    return int(llm_rpc_timeout_ms) + COMPONENT_RPC_HEADROOM_MS
+
+
 def _eint(value: int | None, default: int, *, minimum: int | None = None) -> int:
     if value is None:
         return default
@@ -2134,6 +2150,7 @@ class AffinityPlugin(MaiBotPlugin):
         self._poll_task: Optional[asyncio.Task] = None
         self._poll_stop: Optional[asyncio.Event] = None
         self._gen_locks: dict[str, asyncio.Lock] = {}
+        self._nudge_inflight: set[str] = set()
         # 配置派生缓存
         self._dimensions: list[Dimension] = resolve_dimensions(None)
         self._total_label = DEFAULT_TOTAL_LABEL
@@ -2390,11 +2407,13 @@ class AffinityPlugin(MaiBotPlugin):
         但插件配置已在注册前注入。因此这里先按当前配置刷新派生维度，再把
         当前可调维度清单写进 adjust_score / set_score 的描述与 dimension
         参数枚举，让规划器（planner）知道除 total 外还能调整哪些子项维度。
+        同时给会阻塞等 LLM 的组件写上 ``llm_rpc_timeout_ms + 10s`` 的 Host 调用上限。
         """
         if self._plugin_config_instance is not None:
             self._refresh_config()
         components = super().get_components()
         self._inject_dimension_catalog(components)
+        self._inject_llm_component_timeout(components)
         return components
 
     def _dimension_catalog_text(self) -> str:
@@ -2429,6 +2448,20 @@ class AffinityPlugin(MaiBotPlugin):
                 parameter["enum_values"] = list(enum_values)
                 param_desc = str(parameter.get("description", "") or "")
                 parameter["description"] = f"{param_desc}；可选：{catalog}"
+
+    def _inject_llm_component_timeout(self, components: list[dict[str, Any]]) -> None:
+        """让会阻塞等 LLM 的工具和命令避开 Host 默认的 60 秒 invoke 上限。
+
+        上限在组件注册时写入。之后若只热更新 ``llm_rpc_timeout_ms``，Host 仍用
+        注册时的值，需要重载插件才会跟着变。
+        """
+        timeout_ms = component_rpc_timeout_ms(self._llm_rpc_timeout_ms)
+        for component in components:
+            if component.get("name") not in LLM_BOUND_COMPONENTS:
+                continue
+            metadata = component.get("metadata")
+            if isinstance(metadata, dict):
+                metadata["timeout_ms"] = timeout_ms
 
     def normalize_plugin_config(self, config_data: Mapping[str, Any] | None) -> tuple[dict[str, Any], bool]:
         raw = dict(config_data or {})
@@ -3191,6 +3224,7 @@ class AffinityPlugin(MaiBotPlugin):
         description=(
             "用较小的近期聊天上下文，对某人已有印象档案做增量微调（deltas，可选微调简介）。"
             "适合「最近有点变化、但不必全面重算」的场合。没有档案时不要调用（请让用户先 /卡片，或改用 refresh_impression 做冷启动）。"
+            "调用后立即返回，LLM 在后台完成；不要等待结果，也不要向用户复述本次微调。"
             "target 规则同 adjust_score。"
         ),
         parameters=[
@@ -3198,27 +3232,35 @@ class AffinityPlugin(MaiBotPlugin):
         ],
     )
     async def nudge_impression(self, target: str = "", **kwargs: Any) -> dict[str, str]:
+        """立即返回。LLM 微调放到后台，避免挡住 Host 的 plugin.invoke_tool（默认 60s）。"""
         ref, error = await self._resolve_target(target, kwargs)
         if error or ref is None:
             return {"content": error or "解析对象失败。"}
+        if self._store is None:
+            return {"content": "印象档案还没准备好。"}
+        existing = await self._store.get(ref.person_id)
+        if existing is None:
+            return {"content": "还没有这个人的印象档案。"}
+        if ref.person_id in self._nudge_inflight:
+            return {
+                "content": (
+                    f"对 {ref.display_name} 的印象微调已在后台进行。"
+                    "不必再次调用，也不必向用户说明。"
+                )
+            }
+        self._nudge_inflight.add(ref.person_id)
         stream_id = _resolve_stream_id(kwargs)
-        outcome = await self._nudge_record(ref, stream_id)
-        if outcome.missing or outcome.record is None:
-            return {"content": outcome.error or "还没有这个人的印象档案。"}
-        if outcome.failed:
-            return {"content": outcome.error or "微调失败，已保留原档案。"}
-        lines = [f"已微调对 {ref.display_name} 的印象。"]
-        if outcome.applied:
-            lines.append("增量：")
-            labels = {"total": self._total_label, **{d.key: d.label for d in self._dimensions}}
-            for key, delta in outcome.applied:
-                lines.append(f"- {labels.get(key, key)}　{_fmt_delta(delta)}")
-        else:
-            lines.append("分值无变化。")
-        lines.append("笔记：" + ("已微调" if outcome.note_changed else "未改"))
-        lines.append("")
-        lines.append(self._render_detail_markdown(ref, outcome.record, scale_note=True))
-        return {"content": "\n".join(lines)}
+        try:
+            self._schedule(self._nudge_record_in_background(ref, stream_id))
+        except Exception:
+            self._nudge_inflight.discard(ref.person_id)
+            raise
+        return {
+            "content": (
+                f"已开始在后台微调对 {ref.display_name} 的印象。"
+                "结果会写入档案；本轮回复不必等待，也不必向用户说明这次微调。"
+            )
+        }
 
     @Tool(
         "send_impression_card",
@@ -3481,6 +3523,34 @@ class AffinityPlugin(MaiBotPlugin):
         await self._store.upsert(record)
         self._maybe_schedule_storage_compact(ref.person_id, ref.display_name, record.description)
         return record
+
+    async def _nudge_record_in_background(self, ref: PersonRef, stream_id: str) -> None:
+        """在工具返回之后跑 LLM 微调。失败只记日志，调用方已经离开。"""
+        try:
+            outcome = await self._nudge_record(ref, stream_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.ctx.logger.warning(
+                "后台微调印象失败 person_id=%s: %s", ref.person_id, exc, exc_info=True
+            )
+            return
+        finally:
+            self._nudge_inflight.discard(ref.person_id)
+        if outcome.missing:
+            self.ctx.logger.info("后台微调跳过：尚无档案 person_id=%s", ref.person_id)
+            return
+        if outcome.failed:
+            self.ctx.logger.warning(
+                "后台微调印象未写入 person_id=%s: %s", ref.person_id, outcome.error
+            )
+            return
+        self.ctx.logger.info(
+            "后台微调印象完成 person_id=%s deltas=%s note_changed=%s",
+            ref.person_id,
+            outcome.applied,
+            outcome.note_changed,
+        )
 
     async def _nudge_record(self, ref: PersonRef, stream_id: str) -> NudgeOutcome:
         assert self._store is not None
@@ -3911,7 +3981,7 @@ class AffinityPlugin(MaiBotPlugin):
                 "  例：/impression_card 雷达:3",
                 "",
                 "麦麦工具：",
-                "· nudge_impression — 用较小近期聊天对已有档案做增量微调（无档案时不要调用）",
+                "· nudge_impression — 用较小近期聊天对已有档案做增量微调（立即返回，LLM 在后台；无档案时不要调用）",
                 "· send_impression_card：",
                 "· target — 对象（可省略）",
                 "· refresh_first — 发送前是否刷新",

@@ -5,6 +5,13 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.3.4] - 2026-10-06
+
+### 修复
+
+- `nudge_impression` 改为立即返回，LLM 微调在后台完成。Host 的 `plugin.invoke_tool` 默认 60 秒就会超时，而本插件 LLM 超时是 120 秒，正文调用会在模型还没返回时被记成 `[E_TIMEOUT]`
+- 仍会在返回前等待 LLM 的工具和命令（`refresh_impression`、`get_impression_detail`、`send_impression_card`、`/卡片`、`/刷新印象`）向 Host 声明调用上限为 `llm_rpc_timeout_ms + 10` 秒。改该配置后需重载插件，Host 才会采用新上限
+
 ## [0.3.3] - 2026-09-20
 
 ### 修复

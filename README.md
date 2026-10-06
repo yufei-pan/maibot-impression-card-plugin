@@ -28,7 +28,7 @@
   | `append_impression` | 追加人物印象笔记（超长后台 LLM 精简） |
   | `rewrite_impression` | 覆盖人物印象笔记 |
   | `get_impression_detail` | 以 Markdown 返回某人的完整档案 |
-  | `nudge_impression` | 用较小近期聊天对已有档案做增量微调（deltas，可选微调简介）；没有档案时不要调用 |
+  | `nudge_impression` | 用较小近期聊天对已有档案做增量微调（deltas，可选微调简介）。立即返回，LLM 在后台写入；没有档案时不要调用 |
   | `refresh_impression` | 结合长期记忆 + 最近聊天 + 既有数据重算分值与简介 |
   | `send_impression_card` | 向当前聊天主动发送印象卡片图片（同 `/卡片`；可选 `refresh_first`、`radar_top_n`） |
 
@@ -144,7 +144,7 @@
 所有可调项见 `config.default.toml`。除 `[[dimensions]]` 外的字段**留空 / 注释掉即用内置默认**；
 插件升级调整默认时，留空字段会自动跟随新值。
 
-LLM 调用（冷启动 / 刷新印象 / 查询微调 / 简介精简）的 `cap.call` RPC 超时由 `[general] llm_rpc_timeout_ms` 控制，默认 **120000**（120 秒）。查询微调与冷启动共用该超时，没有单独的 timeout 配置项。
+LLM 调用（冷启动 / 刷新印象 / 查询微调 / 简介精简）的 `cap.call` RPC 超时由 `[general] llm_rpc_timeout_ms` 控制，默认 **120000**（120 秒）。查询微调与冷启动共用该超时，没有单独的 timeout 配置项。会在返回前等待这次 LLM 的工具和命令（`refresh_impression`、`get_impression_detail`、`send_impression_card`、`/卡片`、`/刷新印象`）向 Host 声明的调用上限是 `llm_rpc_timeout_ms + 10000`。`nudge_impression` 立即返回，不占这个上限。改 `llm_rpc_timeout_ms` 后需要重载插件，Host 才会用新的调用上限。
 
 `[proactive]` 控制定期提醒：`interval_hours`（默认 6）是每个聊天流的提醒间隔；`poll_seconds`（默认 300）是扫描间隔；只对间隔内有过消息的活跃聊天触发；默认意图少说话。`enabled = false` 关闭扫描循环。
 

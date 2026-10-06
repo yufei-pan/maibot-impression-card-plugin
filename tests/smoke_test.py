@@ -682,6 +682,95 @@ def test_light_nudge_prompt_placeholders() -> None:
     print("ok: light nudge prompt placeholders")
 
 
+def test_nudge_impression_returns_before_llm() -> None:
+    """正文调用不能等 LLM：Host 的 plugin.invoke_tool 默认 60s，LLM 超时是 120s。"""
+    from types import SimpleNamespace
+
+    ref = affinity.PersonRef(person_id="p1", platform="qq", user_id="10001", user_nickname="甲")
+    record = affinity.AffinityRecord(person_id="p1", display_name="甲", description="旧笔记")
+    release = asyncio.Event()
+    started = asyncio.Event()
+    calls = {"n": 0}
+
+    class _Store:
+        async def get(self, person_id: str):
+            assert person_id == "p1"
+            return record
+
+    async def slow_nudge(target_ref, stream_id: str):
+        del target_ref, stream_id
+        calls["n"] += 1
+        started.set()
+        await release.wait()
+        return affinity.NudgeOutcome(record=record, applied=[("total", 0.2)], note_changed=False)
+
+    async def resolve_target(target: str = "", kwargs: dict | None = None):
+        del target, kwargs
+        return ref, ""
+
+    inst = affinity.create_plugin()
+    inst._store = _Store()
+    inst._resolve_target = resolve_target  # type: ignore[method-assign]
+    inst._nudge_record = slow_nudge  # type: ignore[method-assign]
+    inst._set_context(
+        SimpleNamespace(
+            logger=SimpleNamespace(
+                info=lambda *_a, **_k: None,
+                warning=lambda *_a, **_k: None,
+            )
+        )
+    )
+
+    async def run() -> None:
+        try:
+            result = await asyncio.wait_for(inst.nudge_impression(target="甲"), timeout=0.3)
+        except asyncio.TimeoutError as exc:
+            release.set()
+            raise AssertionError("nudge_impression blocked on the LLM call") from exc
+        assert "后台" in result["content"]
+        await asyncio.wait_for(started.wait(), timeout=0.3)
+        assert calls["n"] == 1
+        again = await inst.nudge_impression(target="甲")
+        assert calls["n"] == 1
+        assert "后台" in again["content"]
+        release.set()
+        if inst._pending:
+            await asyncio.wait_for(asyncio.gather(*inst._pending), timeout=0.3)
+
+        inst._store = _StoreEmpty()
+        missing = await inst.nudge_impression(target="甲")
+        assert "还没有" in missing["content"]
+        assert calls["n"] == 1
+
+    class _StoreEmpty:
+        async def get(self, person_id: str):
+            del person_id
+            return None
+
+    asyncio.run(run())
+    print("ok: nudge_impression returns before LLM")
+
+
+def test_llm_components_declare_rpc_headroom() -> None:
+    """会等 LLM 的工具/命令向 Host 声明 llm_rpc_timeout_ms + 10s，而不是默认 60s。"""
+    inst = affinity.create_plugin()
+    inst.set_plugin_config(inst.build_default_config())
+    by_name = {c["name"]: c for c in inst.get_components()}
+    expected = affinity.DEFAULT_LLM_RPC_TIMEOUT_MS + affinity.COMPONENT_RPC_HEADROOM_MS
+    for name in affinity.LLM_BOUND_COMPONENTS:
+        assert by_name[name]["metadata"]["timeout_ms"] == expected, name
+    assert by_name["adjust_score"]["metadata"].get("timeout_ms", 0) == 0
+    assert by_name["nudge_impression"]["metadata"].get("timeout_ms", 0) == 0
+
+    cfg = affinity.AffinityPluginConfig().model_dump(mode="python")
+    cfg["general"]["llm_rpc_timeout_ms"] = 45_000
+    inst.set_plugin_config(cfg)
+    by_name = {c["name"]: c for c in inst.get_components()}
+    assert by_name["refresh_impression"]["metadata"]["timeout_ms"] == 55_000
+    assert by_name["impression_refresh"]["metadata"]["timeout_ms"] == 55_000
+    print("ok: llm-bound components use llm timeout plus 10s")
+
+
 def test_nudge_impression_tool_declared() -> None:
     inst = affinity.create_plugin()
     inst.set_plugin_config(inst.build_default_config())
@@ -1085,6 +1174,8 @@ def main() -> None:
     test_parse_and_apply_nudge_payload()
     test_nudge_max_abs_delta_and_long_note_guard()
     test_light_nudge_prompt_placeholders()
+    test_nudge_impression_returns_before_llm()
+    test_llm_components_declare_rpc_headroom()
     test_nudge_impression_tool_declared()
     test_resolve_llm_route_prefers_task_names()
     test_resolve_llm_route_uses_model_name_when_not_a_task()
