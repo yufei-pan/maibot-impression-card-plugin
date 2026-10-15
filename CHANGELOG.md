@@ -5,6 +5,12 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.3.5] - 2026-10-14
+
+### 变更
+
+- 宿主最低版本升至 **1.2.5**：印象生成与微调的 LLM 调用按 `task_name` / `model_name` 路由，宿主 1.2.5 才在公开 LLM 能力中区分二者；更早的宿主会忽略 `task_name`、把 `model_name` 当任务名解析，导致调用落到错误的任务。SDK 仍为 **≥2.8.1**
+
 ## [0.3.4] - 2026-10-06
 
 ### 修复
